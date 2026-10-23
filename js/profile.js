@@ -2600,7 +2600,6 @@
       <div class="tabs" style="flex-wrap:wrap">
         ${STUDIO_KINDS.map((k) => `<button type="button" class="btn btn-sm ${k === kind ? "btn-primary" : "btn-ghost"}" data-sk="${k}">${studioKindLabel(k)}</button>`).join("")}
       </div>
-      <p class="muted" style="margin:6px 0 12px">${t("prof.cr.note")}</p>
       <div id="studio-form"></div>`;
     box.querySelectorAll("[data-sk]").forEach((b) => (b.onclick = () => ((state.studioKind = b.dataset.sk), studioCreate(box))));
     const host = box.querySelector("#studio-form");

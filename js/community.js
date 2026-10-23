@@ -88,6 +88,193 @@
     return null;
   }
 
+  // Community question / answer files are public content. Keep storage names
+  // random and extensionless; retain the original name only as escaped metadata.
+  const QA_BUCKET = "community-attachments";
+  const QA_MAX_FILES = 5;
+  const QA_MAX_FILE_BYTES = 50 * 1024 * 1024;
+  const QA_MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+  const qaEncodePath = (path) => String(path || "").split("/").map(encodeURIComponent).join("/");
+  const qaFileName = (name) => String(name || "").split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 180) || "file";
+  const qaSize = (size) => {
+    const n = Math.max(0, Number(size) || 0);
+    if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+    return `${n} B`;
+  };
+  function qaToken() {
+    const bytes = new Uint8Array(16);
+    if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
+    else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  const qaStorageUrl = (path) => `${String(C().SUPABASE_URL || "").replace(/\/+$/, "")}/storage/v1/object/${QA_BUCKET}/${qaEncodePath(path)}`;
+  const qaPublicUrl = (path) => `${String(C().SUPABASE_URL || "").replace(/\/+$/, "")}/storage/v1/object/public/${QA_BUCKET}/${qaEncodePath(path)}`;
+  const qaAuthHeaders = (extra) => ({
+    apikey: C().SUPABASE_KEY,
+    Authorization: `Bearer ${C().SUPABASE_KEY}`,
+    ...(extra || {}),
+  });
+
+  async function removeQAFiles(paths) {
+    await Promise.all((paths || []).map(async (path) => {
+      try {
+        await fetch(qaStorageUrl(path), { method: "DELETE", headers: qaAuthHeaders() });
+      } catch {
+        /* cleanup must not hide the original save error */
+      }
+    }));
+  }
+
+  async function uploadQAFiles(kind, files, statusNode) {
+    if (!files.length) return [];
+    if (!["questions", "answers"].includes(kind)) return null;
+    const uploaded = [];
+    const attachments = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const path = `${kind}/${qaToken()}`;
+      if (statusNode) statusNode.textContent = t("com.uploadingFile", { current: i + 1, total: files.length });
+      let res;
+      try {
+        res = await fetch(qaStorageUrl(path), {
+          method: "POST",
+          headers: qaAuthHeaders({
+            "Content-Type": file.type || "application/octet-stream",
+            "Cache-Control": "3600",
+            "x-upsert": "false",
+          }),
+          body: file,
+        });
+      } catch {
+        await removeQAFiles(uploaded);
+        return null;
+      }
+      if (!res.ok) {
+        await removeQAFiles(uploaded);
+        return null;
+      }
+      uploaded.push(path);
+      attachments.push({
+        name: qaFileName(file.name),
+        path,
+        mime: file.type || "application/octet-stream",
+        size: Number(file.size) || 0,
+      });
+    }
+    return attachments;
+  }
+
+  function attachmentEntries(value, kind) {
+    if (!Array.isArray(value)) return [];
+    const prefix = kind === "question" ? "questions" : "answers";
+    return value.slice(0, QA_MAX_FILES).reduce((items, item) => {
+      const path = String(item?.path || "");
+      if (!new RegExp(`^${prefix}/[a-f0-9]{32}$`, "i").test(path)) return items;
+      items.push({
+        path,
+        name: qaFileName(item.name),
+        mime: String(item.mime || "application/octet-stream").slice(0, 120).toLowerCase(),
+        size: Number(item.size) || 0,
+      });
+      return items;
+    }, []);
+  }
+
+  function attachmentHtml(value, kind) {
+    const files = attachmentEntries(value, kind);
+    if (!files.length) return "";
+    const size = (file) => `<span class="com-attach-size">${esc(qaSize(file.size))}</span>`;
+    const download = (file) => `${qaPublicUrl(file.path)}?download=${encodeURIComponent(file.name)}`;
+    const cards = files.map((file) => {
+      const url = qaPublicUrl(file.path);
+      const href = download(file);
+      if (/^image\/(jpeg|png|gif|webp|avif|bmp)$/i.test(file.mime))
+        return `<figure class="com-attach-card com-attach-image">
+          <a href="${esc(url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(url)}" alt="${esc(file.name)}" loading="lazy" /></a>
+          <figcaption><span class="com-attach-name">${esc(file.name)}</span>${size(file)}<a class="com-attach-download" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(t("com.download"))}</a></figcaption>
+        </figure>`;
+      if (/^video\/(mp4|webm|ogg|quicktime|x-matroska|3gpp)$/i.test(file.mime))
+        return `<figure class="com-attach-card com-attach-video">
+          <video controls playsinline preload="metadata" src="${esc(url)}"></video>
+          <figcaption><span class="com-attach-name">${esc(file.name)}</span>${size(file)}<a class="com-attach-download" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(t("com.download"))}</a></figcaption>
+        </figure>`;
+      return `<div class="com-attach-file">
+        <span class="com-attach-file-icon" aria-hidden="true">📎</span>
+        <span class="com-attach-file-meta"><strong>${esc(file.name)}</strong>${size(file)}</span>
+        <a class="btn btn-sm btn-ghost" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(t("com.download"))}</a>
+      </div>`;
+    });
+    return `<div class="com-attachments" aria-label="${esc(t("com.attachFiles"))}">${cards.join("")}</div>`;
+  }
+
+  function attachmentPickerMarkup(id) {
+    return `<div class="com-attach-field">
+      <span class="com-field-label">${esc(t("com.attachFiles"))}</span>
+      <label class="com-dropzone" data-com-dropzone>
+        <input id="${id}" class="com-file-input" type="file" multiple />
+        <span class="com-drop-icon" aria-hidden="true">📎</span>
+        <span class="com-drop-copy"><strong>${esc(t("com.attachDrop"))}</strong><small>${esc(t("com.attachHint"))}</small></span>
+      </label>
+      <div class="com-selected-files" data-com-files aria-live="polite"></div>
+    </div>`;
+  }
+
+  function bindAttachmentPicker(form, inputId) {
+    let selected = [];
+    const input = form.querySelector(`#${inputId}`);
+    const drop = form.querySelector("[data-com-dropzone]");
+    const list = form.querySelector("[data-com-files]");
+    const render = () => {
+      list.innerHTML = selected.map((file, index) => `<div class="com-selected-file">
+        <span class="com-attach-file-icon" aria-hidden="true">${file.type.startsWith("image/") ? "🖼️" : file.type.startsWith("video/") ? "🎬" : "📎"}</span>
+        <span class="com-attach-file-meta"><strong>${esc(qaFileName(file.name))}</strong><small>${esc(qaSize(file.size))}</small></span>
+        <button type="button" class="com-remove-file" data-com-file-remove="${index}" aria-label="${esc(t("com.removeFile", { name: qaFileName(file.name) }))}">×</button>
+      </div>`).join("");
+      list.querySelectorAll("[data-com-file-remove]").forEach((button) => {
+        button.onclick = () => {
+          selected.splice(Number(button.dataset.comFileRemove), 1);
+          render();
+        };
+      });
+    };
+    const addFiles = (incoming) => {
+      for (const file of Array.from(incoming || [])) {
+        if (selected.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) continue;
+        if (selected.length >= QA_MAX_FILES) {
+          toast(t("com.attachCountLimit", { max: QA_MAX_FILES }));
+          break;
+        }
+        if (file.size > QA_MAX_FILE_BYTES) {
+          toast(t("com.fileTooLarge", { max: "50 MB" }));
+          continue;
+        }
+        const total = selected.reduce((sum, item) => sum + item.size, 0);
+        if (total + file.size > QA_MAX_TOTAL_BYTES) {
+          toast(t("com.attachTotalLimit", { max: "100 MB" }));
+          continue;
+        }
+        selected.push(file);
+      }
+      render();
+    };
+    input.addEventListener("change", () => {
+      addFiles(input.files);
+      input.value = "";
+    });
+    drop.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      drop.classList.add("is-dragover");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("is-dragover"));
+    drop.addEventListener("drop", (event) => {
+      event.preventDefault();
+      drop.classList.remove("is-dragover");
+      addFiles(event.dataTransfer?.files);
+    });
+    return () => selected.slice();
+  }
+
   // ─────────────────────────── questions ───────────────────────────
   async function listQuestions(box) {
     const [res, arts] = await Promise.all([
@@ -112,24 +299,63 @@
 
   function askForm(box) {
     if (!meId()) return (box.innerHTML = loginNote());
-    box.innerHTML = `<form id="com-ask" class="com-form glass">
-      <input name="title" maxlength="200" required placeholder="${esc(t("com.qTitle"))}" />
-      <textarea name="details" rows="5" placeholder="${esc(t("com.detailsPh"))}"></textarea>
-      <div><button class="btn btn-primary" type="submit">${esc(t("com.postQ"))}</button>
-      <button class="btn btn-ghost" type="button" onclick="location.hash=''">${esc(t("common.cancel"))}</button></div>
+    box.innerHTML = `<form id="com-ask" class="com-form com-qa-form glass">
+      <header class="com-qa-head">
+        <span class="com-qa-mark" aria-hidden="true">❓</span>
+        <div><p class="eyebrow">${esc(t("com.ask"))}</p><h2>${esc(t("com.askHeading"))}</h2><p class="muted">${esc(t("com.askIntro"))}</p></div>
+      </header>
+      <div class="com-field">
+        <label class="com-field-label" for="com-question-title">${esc(t("com.qTitle"))} <span class="com-required" aria-hidden="true">*</span></label>
+        <input id="com-question-title" name="title" maxlength="200" required placeholder="${esc(t("com.qTitlePh"))}" />
+      </div>
+      <div class="com-field">
+        <label class="com-field-label" for="com-question-details">${esc(t("com.questionText"))} <span class="com-required" aria-hidden="true">*</span></label>
+        <textarea id="com-question-details" name="details" rows="7" maxlength="5000" required placeholder="${esc(t("com.detailsPh"))}"></textarea>
+      </div>
+      ${attachmentPickerMarkup("com-question-files")}
+      <p class="com-form-status" data-com-status role="status" aria-live="polite"></p>
+      <div class="com-form-actions">
+        <button class="btn btn-primary" type="submit">${esc(t("com.postQ"))}</button>
+        <button class="btn btn-ghost" type="button" data-com-cancel>${esc(t("common.cancel"))}</button>
+      </div>
     </form>`;
-    box.querySelector("#com-ask").onsubmit = async (e) => {
+    const form = box.querySelector("#com-ask");
+    const selectedFiles = bindAttachmentPicker(form, "com-question-files");
+    form.querySelector("[data-com-cancel]").onclick = () => {
+      if (document.getElementById("com-root")) location.hash = "#questions";
+      else location.href = "./profile.html?section=community";
+    };
+    form.onsubmit = async (e) => {
       e.preventDefault();
-      const fd = new FormData(e.target);
+      const fd = new FormData(form);
+      const title = String(fd.get("title") || "").trim();
+      const details = String(fd.get("details") || "").trim();
+      if (!title || !details) return toast(t("com.questionRequired"));
+      const submit = form.querySelector('[type="submit"]');
+      const status = form.querySelector("[data-com-status]");
+      submit.disabled = true;
+      status.textContent = t("com.saving");
+      const files = selectedFiles();
+      const attachments = await uploadQAFiles("questions", files, status);
+      if (attachments === null) {
+        submit.disabled = false;
+        status.textContent = "";
+        return toast(t("com.uploadFail"));
+      }
       const row = await insertRow("/rest/v1/community_questions", {
         member_id: meId(),
-        title: String(fd.get("title") || "").trim(),
-        details: String(fd.get("details") || "").trim(),
+        title,
+        details,
+        attachments,
       });
-      if (row) {
-        toast(t("com.saved"));
-        location.hash = `#q/${row.id}`;
+      if (!row) {
+        await removeQAFiles(attachments.map((file) => file.path));
+        submit.disabled = false;
+        status.textContent = "";
+        return;
       }
+      toast(t("com.saved"));
+      location.href = dLink("question", row.id);
     };
   }
 
@@ -163,13 +389,15 @@
       <article class="com-q glass">
         <h2>${esc(q.title)}</h2>
         <p class="muted">${esc(who(names, q.member_id))} · ${esc(when(q.created_at))}</p>
-        ${q.details ? `<p class="com-body">${esc(q.details)}</p>` : ""}
+        <p class="com-body">${esc(q.details || "")}</p>
+        ${attachmentHtml(q.attachments, "question")}
       </article>
       <h3 class="com-h3">💬 ${answers.length} ${esc(t("com.answersN"))}</h3>
       <div id="com-answers">${answers
         .map(
           (a) => `<div class="com-answer glass${a.id === hlAnswerId ? " com-hl" : ""}" data-ans="${a.id}">
             <p class="com-body">${esc(a.body)}</p>
+            ${attachmentHtml(a.attachments, "answer")}
             <div class="com-a-foot">
               <span class="muted">${esc(who(names2, a.member_id))} · ${esc(when(a.created_at))}</span>
               <button type="button" class="btn btn-sm ${mine.has(a.id) ? "btn-primary" : "btn-ghost"}" data-vote="${a.id}" ${me && a.member_id !== me ? "" : me ? "disabled" : "disabled"}>👍 ${a.votes || 0} ${esc(t("com.helpful"))}</button>
@@ -179,9 +407,18 @@
         .join("")}</div>
       ${
         me
-          ? `<form id="com-answer" class="com-form glass">
-              <textarea name="body" rows="4" required placeholder="${esc(t("com.write"))}"></textarea>
-              <div><button class="btn btn-primary" type="submit">${esc(t("com.postA"))}</button></div>
+          ? `<form id="com-answer" class="com-form com-qa-form com-answer-compose glass">
+              <header class="com-qa-head">
+                <span class="com-qa-mark" aria-hidden="true">↩</span>
+                <div><h3>${esc(t("com.answerHeading"))}</h3><p class="muted">${esc(t("com.answerIntro"))}</p></div>
+              </header>
+              <div class="com-field">
+                <label class="com-field-label" for="com-answer-body">${esc(t("com.questionTextAnswer"))} <span class="com-required" aria-hidden="true">*</span></label>
+                <textarea id="com-answer-body" name="body" rows="5" maxlength="5000" required placeholder="${esc(t("com.write"))}"></textarea>
+              </div>
+              ${attachmentPickerMarkup("com-answer-files")}
+              <p class="com-form-status" data-com-status role="status" aria-live="polite"></p>
+              <div class="com-form-actions"><button class="btn btn-primary" type="submit">${esc(t("com.postA"))}</button></div>
             </form>`
           : loginNote()
       }`;
@@ -207,20 +444,50 @@
       if (tur) tur.scrollIntoView({ block: "center", behavior: "smooth" });
     }
     const f = box.querySelector("#com-answer");
-    if (f)
+    if (f) {
+      const selectedFiles = bindAttachmentPicker(f, "com-answer-files");
       f.onsubmit = async (e) => {
         e.preventDefault();
         const body = String(new FormData(f).get("body") || "").trim();
-        if (!body) return;
-        const row = await insertRow("/rest/v1/community_answers", { question_id: id, member_id: meId(), body });
-        if (row) questionView(box, id);
+        if (!body) return toast(t("com.answerRequired"));
+        const submit = f.querySelector('[type="submit"]');
+        const status = f.querySelector("[data-com-status]");
+        submit.disabled = true;
+        status.textContent = t("com.saving");
+        const files = selectedFiles();
+        const attachments = await uploadQAFiles("answers", files, status);
+        if (attachments === null) {
+          submit.disabled = false;
+          status.textContent = "";
+          return toast(t("com.uploadFail"));
+        }
+        const row = await insertRow("/rest/v1/community_answers", {
+          question_id: id,
+          member_id: meId(),
+          body,
+          attachments,
+        });
+        if (!row) {
+          await removeQAFiles(attachments.map((file) => file.path));
+          submit.disabled = false;
+          status.textContent = "";
+          return;
+        }
+        questionView(box, id);
       };
+    }
   }
 
   // ─────────────────────────── articles ───────────────────────────
+  function articleIsPublicNow(row) {
+    if (!row || ["draft", "pending"].includes(String(row.status || "published"))) return false;
+    const publishAt = Date.parse(row.publish_at || "");
+    return !Number.isFinite(publishAt) || publishAt <= Date.now();
+  }
+
   async function listArticles(box) {
     const res = await req("/rest/v1/community_articles?select=*&order=created_at.desc&limit=80");
-    const rows = res.ok && Array.isArray(res.data) ? res.data : [];
+    const rows = res.ok && Array.isArray(res.data) ? res.data.filter(articleIsPublicNow) : [];
     if (!res.ok) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))}</p>`);
     if (!rows.length)
       return (box.innerHTML = `<p class="com-empty muted">${esc(t("com.emptyA"))} <a class="btn btn-sm btn-primary" href="#new-article">${esc(t("com.newArticle"))}</a></p>`);
@@ -278,8 +545,11 @@
         body: JSON.stringify({ views: Number(a.views || 0) + 1 }),
       }).catch(() => {});
 
-    // A draft (or a Help article awaiting a moderator) is not public yet.
+    // Drafts, Help submissions awaiting review, and scheduled articles stay private until released.
     if (a.status === "draft" && !mine)
+      return (box.innerHTML = `<a class="com-back" href="${back}">← ${esc(t("com.backList"))}</a>
+        <p class="com-note">🔒 ${esc(t("ae.notPublished"))}</p>`);
+    if (!articleIsPublicNow(a) && !mine)
       return (box.innerHTML = `<a class="com-back" href="${back}">← ${esc(t("com.backList"))}</a>
         <p class="com-note">🔒 ${esc(t("ae.notPublished"))}</p>`);
 
@@ -729,8 +999,11 @@
   // same rows the lists draw, so both always look and link the same way.
   async function homeRows(box, kind, limit) {
     const table = kind === "questions" ? "community_questions" : "community_articles";
-    const res = await req(`/rest/v1/${table}?select=*&order=created_at.desc&limit=${Math.max(1, Number(limit) || 4)}`);
-    const rows = res.ok && Array.isArray(res.data) ? res.data : [];
+    const take = Math.max(1, Number(limit) || 4);
+    const fetchLimit = kind === "questions" ? take : Math.max(80, take);
+    const res = await req(`/rest/v1/${table}?select=*&order=created_at.desc&limit=${fetchLimit}`);
+    const fetched = res.ok && Array.isArray(res.data) ? res.data : [];
+    const rows = (kind === "questions" ? fetched : fetched.filter(articleIsPublicNow)).slice(0, take);
     if (!res.ok) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))}</p>`);
     if (!rows.length) return (box.innerHTML = `<p class="com-empty muted">${esc(t(kind === "questions" ? "com.emptyQ" : "com.emptyA"))}</p>`);
     const names = await nameMap(rows.map((r) => r.member_id));

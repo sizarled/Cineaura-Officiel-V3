@@ -98,6 +98,18 @@
   const LANGS = Object.keys(LANG_NAME);
   const TIERS = "N1 N2 N3 K1 K2 K3 M1 M2 M3 B1 B2 B3".split(" ");
   const COUNTRIES = ["MA", "DZ", "TN", "LY", "EG", "SD", "SA", "AE", "QA", "KW", "BH", "OM", "YE", "IQ", "SY", "LB", "JO", "PS", "MR", "TR", "FR", "DE", "ES", "GB", "US", "CA"];
+  const COUNTRY_NAMES = {
+    MA: { en: "Morocco", ar: "المغرب" }, DZ: { en: "Algeria", ar: "الجزائر" }, TN: { en: "Tunisia", ar: "تونس" },
+    LY: { en: "Libya", ar: "ليبيا" }, EG: { en: "Egypt", ar: "مصر" }, SD: { en: "Sudan", ar: "السودان" },
+    SA: { en: "Saudi Arabia", ar: "السعودية" }, AE: { en: "United Arab Emirates", ar: "الإمارات" }, QA: { en: "Qatar", ar: "قطر" },
+    KW: { en: "Kuwait", ar: "الكويت" }, BH: { en: "Bahrain", ar: "البحرين" }, OM: { en: "Oman", ar: "عُمان" },
+    YE: { en: "Yemen", ar: "اليمن" }, IQ: { en: "Iraq", ar: "العراق" }, SY: { en: "Syria", ar: "سوريا" },
+    LB: { en: "Lebanon", ar: "لبنان" }, JO: { en: "Jordan", ar: "الأردن" }, PS: { en: "Palestine", ar: "فلسطين" },
+    MR: { en: "Mauritania", ar: "موريتانيا" }, TR: { en: "Turkey", ar: "تركيا" }, FR: { en: "France", ar: "فرنسا" },
+    DE: { en: "Germany", ar: "ألمانيا" }, ES: { en: "Spain", ar: "إسبانيا" }, GB: { en: "United Kingdom", ar: "المملكة المتحدة" },
+    US: { en: "United States", ar: "الولايات المتحدة" }, CA: { en: "Canada", ar: "كندا" },
+  };
+  const countryLabel = (code) => L(COUNTRY_NAMES[code]) || code;
 
   /* ---------- sanitiser --------------------------------------------------- */
   const ALLOWED = new Set(["P", "BR", "H2", "H3", "H4", "B", "STRONG", "I", "EM", "U", "S", "BLOCKQUOTE", "UL", "OL", "LI", "A", "IMG", "VIDEO", "IFRAME", "SPAN", "DIV", "FIGURE", "FIGCAPTION", "HR"]);
@@ -215,7 +227,9 @@
   // Whether this viewer may read the body. The owner and staff always can.
   function canRead(row, viewer, staff = false) {
     if (!row) return false;
-    if (row.status === "draft") return Boolean(viewer && viewer.member_id === row.member_id) || staff;
+    const future = row.publish_at && Date.parse(row.publish_at) > Date.now();
+    if (row.status === "draft" || row.status === "pending" || future)
+      return Boolean(viewer && viewer.member_id === row.member_id) || staff;
     if (viewer && viewer.member_id === row.member_id) return true;
     if (staff) return true;
     if (row.visibility === "public") return true;
@@ -248,7 +262,7 @@
     if (!root) return;
     const me = session();
     if (!me?.member_id)
-      return (root.innerHTML = `<p class="empty">${esc(t("ae.needLogin"))} <a class="btn btn-sm btn-primary" href="./login.html">${esc(t("nav.signin"))}</a></p>`);
+      return (root.innerHTML = `<p class="ae-login-note">${esc(t("ae.needLogin"))} <a class="btn btn-sm btn-primary" href="./login.html">${esc(t("nav.signin"))}</a></p>`);
     state.me = { member_id: me.member_id, username: me.username || "" };
     state.root = root;
     state.editId = opts.id || new URLSearchParams(location.search).get("edit") || "";
@@ -258,33 +272,37 @@
   const state = { me: null, root: null, editId: "", sel: null, media: "", thumb: "", existing: null, pvRun: 0, reminded: false };
 
   function shell() {
+    const themeIcon = document.documentElement.dataset.theme === "day" ? "☾" : "☀︎";
     return `
       <div class="ae-shell">
-        <div class="ae-top">
-          <div class="ae-top-main">
-            <span class="eyebrow">${esc(t("ae.eyebrow"))}</span>
-            <h1>${esc(t("ae.title"))}</h1>
-          </div>
-          <div class="ae-top-actions">
+        <header class="ae-header">
+          <div class="ae-header-inner">
+            <div class="ae-logo" aria-label="CineAura">
+              <span class="ae-logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span>
+              <span class="ae-logo-word">Cine<span>Aura</span></span>
+            </div>
             <span class="ae-state" id="ae-state">${esc(t("ae.draft"))}</span>
+            <button class="btn btn-sm btn-ghost ae-theme" type="button" id="ae-theme" aria-label="${esc(t("set.theme"))}">${themeIcon}</button>
             <button class="btn btn-sm btn-ghost" type="button" id="ae-preview">${esc(t("ae.preview"))}</button>
             <button class="btn btn-sm btn-primary" type="button" id="ae-publish">${esc(t("ae.publish"))}</button>
           </div>
-        </div>
+        </header>
+
         <div class="ae-layout">
           <section class="ae-card ae-main">
-            <div class="ae-toolbar" id="ae-tb" role="toolbar"></div>
+            <div class="ae-toolbar" id="ae-tb" role="toolbar" aria-label="${esc(t("ae.editorTools"))}"></div>
             <div class="ae-doc">
-              <input id="ae-title" class="ae-title" maxlength="200" placeholder="${esc(t("ae.titlePh"))}" aria-label="${esc(t("ae.titlePh"))}" />
+              <input id="ae-title" class="ae-title" type="text" maxlength="200" placeholder="${esc(t("ae.titlePh"))}" aria-label="${esc(t("ae.titlePh"))}" />
               <textarea id="ae-desc" class="ae-desc" rows="2" maxlength="400" placeholder="${esc(t("ae.descPh"))}" aria-label="${esc(t("ae.descPh"))}"></textarea>
               <div id="ae-body" class="ae-body" contenteditable="true" role="textbox" aria-multiline="true" data-ph="${esc(t("ae.bodyPh"))}"></div>
             </div>
           </section>
+
           <aside class="ae-side">
             <div class="ae-card ae-panel">
               <h3>${esc(t("ae.where"))}</h3>
               <label class="ae-check"><input type="checkbox" id="ae-in-content" checked /> ${esc(t("ae.inContent"))}</label>
-              <div class="ae-sub" id="ae-content-sub">
+              <div class="ae-sub show" id="ae-content-sub">
                 <label class="ae-f" for="ae-field">${esc(t("ae.field"))}</label>
                 <select id="ae-field"></select>
                 <label class="ae-f" for="ae-niche">${esc(t("ae.niche"))}</label>
@@ -294,16 +312,21 @@
                 <label class="ae-f" for="ae-nano">${esc(t("ae.nano"))}</label>
                 <input id="ae-nano" type="text" maxlength="80" disabled placeholder="${esc(t("ae.nanoHint"))}" />
               </div>
-              <label class="ae-check" style="margin-top:14px"><input type="checkbox" id="ae-in-help" /> ${esc(t("ae.inHelp"))}</label>
+              <label class="ae-check ae-help-check"><input type="checkbox" id="ae-in-help" /> ${esc(t("ae.inHelp"))}</label>
               <p class="ae-hint">${esc(t("ae.helpNote"))}</p>
               <div class="ae-sub" id="ae-help-sub">
+                <label class="ae-f">${esc(t("ae.helpSections"))}</label>
                 <div id="ae-help-tree"></div>
+                <p class="ae-hint">${esc(t("ae.helpSectionsHint"))}</p>
               </div>
             </div>
 
             <div class="ae-card ae-panel">
               <h3>${esc(t("ae.when"))}</h3>
-              <div class="ae-seg" id="ae-when"><button type="button" class="on" data-v="now">${esc(t("ae.now"))}</button><button type="button" data-v="later">${esc(t("ae.later"))}</button></div>
+              <div class="ae-seg" id="ae-when">
+                <button type="button" class="on" data-v="now">${esc(t("ae.now"))}</button>
+                <button type="button" data-v="later">${esc(t("ae.later"))}</button>
+              </div>
               <div class="ae-sub" id="ae-when-sub">
                 <label class="ae-f" for="ae-when-at">${esc(t("ae.date"))}</label>
                 <input type="datetime-local" id="ae-when-at" />
@@ -331,11 +354,12 @@
               </div>
               <div class="ae-sub" id="ae-priv">
                 <label class="ae-f" for="ae-user">${esc(t("ae.addUser"))}</label>
-                <div class="ae-row"><input id="ae-user" type="text" placeholder="@username" dir="ltr" /><button class="btn btn-sm" type="button" id="ae-user-add">+</button></div>
+                <div class="ae-row"><input id="ae-user" type="text" placeholder="@username" dir="ltr" /><button class="btn btn-sm ae-quiet-btn" type="button" id="ae-user-add">${esc(t("ae.add"))}</button></div>
                 <div class="ae-chips" id="ae-user-chips"></div>
+                <p class="ae-hint">${esc(t("ae.privateGateText"))}</p>
                 <label class="ae-f" for="ae-pass">${esc(t("ae.passwords"))}</label>
-                <div class="ae-row"><input id="ae-pass" type="text" dir="ltr" autocomplete="off" /><button class="btn btn-sm" type="button" id="ae-pass-add">+</button></div>
-                <div class="ae-mini"><button class="btn btn-sm" type="button" id="ae-pass-gen">${esc(t("ae.genPass"))}</button></div>
+                <div class="ae-row"><input id="ae-pass" type="text" dir="ltr" autocomplete="off" placeholder="${esc(t("ae.joinPass"))}" /><button class="btn btn-sm ae-quiet-btn" type="button" id="ae-pass-add">${esc(t("ae.add"))}</button></div>
+                <div class="ae-mini"><button class="btn btn-sm ae-quiet-btn" type="button" id="ae-pass-gen">${esc(t("ae.genPass"))}</button></div>
                 <div class="ae-chips" id="ae-pass-chips"></div>
                 <p class="ae-hint">${esc(t("ae.passHint"))}</p>
               </div>
@@ -354,9 +378,9 @@
               <h3>${esc(t("ae.thumb"))}</h3>
               <div class="ae-thumb" id="ae-thumb">${esc(t("ae.noThumb"))}</div>
               <div class="ae-mini">
-                <button class="btn btn-sm" type="button" id="ae-th-up">${esc(t("ae.upload"))}</button>
-                <button class="btn btn-sm" type="button" id="ae-th-url">${esc(t("ae.url"))}</button>
-                <button class="btn btn-sm" type="button" id="ae-th-auto">${esc(t("ae.fromBody"))}</button>
+                <button class="btn btn-sm ae-quiet-btn" type="button" id="ae-th-up">${esc(t("ae.upload"))}</button>
+                <button class="btn btn-sm ae-quiet-btn" type="button" id="ae-th-url">${esc(t("ae.url"))}</button>
+                <button class="btn btn-sm ae-quiet-btn" type="button" id="ae-th-auto">${esc(t("ae.fromBody"))}</button>
                 <button class="btn btn-sm btn-danger" type="button" id="ae-th-del">${esc(t("ae.remove"))}</button>
               </div>
               <input type="file" id="ae-th-file" accept="image/*" hidden />
@@ -370,15 +394,15 @@
           <input id="ae-dlg-url" type="url" dir="ltr" placeholder="https://" />
           <p class="ae-hint" id="ae-dlg-hint"></p>
           <div class="ae-dlg-act">
-            <button class="btn btn-primary" type="button" id="ae-dlg-ok">${esc(t("ae.insert"))}</button>
-            <button class="btn" type="button" id="ae-dlg-file">${esc(t("ae.uploadFile"))}</button>
-            <button class="btn" type="button" id="ae-dlg-no">${esc(t("common.cancel"))}</button>
+            <button class="btn btn-sm btn-primary" type="button" id="ae-dlg-ok">${esc(t("ae.insert"))}</button>
+            <button class="btn btn-sm btn-ghost" type="button" id="ae-dlg-file">${esc(t("ae.uploadFile"))}</button>
+            <button class="btn btn-sm btn-ghost" type="button" id="ae-dlg-no">${esc(t("common.cancel"))}</button>
           </div>
           <input type="file" id="ae-dlg-input" hidden />
         </dialog>
 
         <dialog id="ae-pv" class="ae-dialog ae-pv">
-          <div class="ae-pv-bar"><strong>${esc(t("ae.preview"))}</strong><button class="btn btn-sm" type="button" id="ae-pv-close">${esc(t("common.close"))}</button></div>
+          <div class="ae-pv-bar"><strong>${esc(t("ae.preview"))}</strong><button class="btn btn-sm btn-ghost" type="button" id="ae-pv-close">${esc(t("common.close"))}</button></div>
           <div class="ae-sim" id="ae-sim">
             <label>${esc(t("ae.sim.name"))}<input type="text" id="ae-s-user" value="@sara" dir="ltr" /></label>
             <label>${esc(t("ae.sim.country"))}<select id="ae-s-country"></select></label>
@@ -418,36 +442,75 @@
 
     // load an existing article (member edit, or staff editing any article)
     if (state.editId) {
-      const res = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(state.editId)}&select=*`);
-      const row = res.ok && Array.isArray(res.data) ? res.data[0] : null;
+      let res = null;
+      try {
+        res = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(state.editId)}&select=*`);
+      } catch {
+        /* keep the new-article shell usable if the network is temporarily down */
+      }
+      const row = res?.ok && Array.isArray(res.data) ? res.data[0] : null;
       if (row) {
         state.existing = row;
         $("ae-title").value = row.title || "";
         $("ae-desc").value = row.description || "";
         $("ae-body").innerHTML = sanitize(row.body_html || (row.body ? `<p>${esc(row.body)}</p>` : ""));
         state.thumb = row.thumb || "";
-        state.data.cats = listOf(row.categories);
+        state.data.cats = listOf(row.categories || row.tags);
         state.data.users = listOf(row.private_users);
         state.data.passes = listOf(row.private_passwords);
         state.data.helpSections = listOf(row.help_sections);
-        state.data.inContent = (row.places || "content").includes("content");
-        state.data.inHelp = (row.places || "").includes("help");
-        if (row.language) $("ae-language").value = row.language;
+
+        const places = String(row.places || "content");
+        state.data.inContent = places === "both" || places.includes("content") || !places.includes("help");
+        state.data.inHelp = places === "both" || places.includes("help");
+        $("ae-in-content").checked = state.data.inContent;
+        $("ae-content-sub").classList.toggle("show", state.data.inContent);
+        $("ae-in-help").checked = state.data.inHelp;
+        $("ae-help-sub").classList.toggle("show", state.data.inHelp);
+
+        if (LANGS.includes(row.language)) $("ae-language").value = row.language;
         const c = critOf(row);
+        state.data.countries = c.countries.slice();
+        state.data.languages = c.languages.slice();
         $("ae-fol").checked = c.followers;
         $("ae-lvmin").value = c.lvMin;
         $("ae-lvmax").value = c.lvMax;
-        setVis(row.visibility || "public");
-        if (row.publish_at && new Date(row.publish_at).getTime() > Date.now()) {
+        $("ae-tier").value = c.tier;
+        setVis(["public", "exclusive", "private"].includes(row.visibility) ? row.visibility : "public");
+
+        const fieldKey = Object.prototype.hasOwnProperty.call(CONTENT, row.content_field) ? row.content_field : "";
+        if (fieldKey) {
+          $("ae-field").value = fieldKey;
+          $("ae-field").dispatchEvent(new Event("change"));
+          const savedNiche = (NICHES[fieldKey] || []).find((n) => n.en === row.content_niche || n.ar === row.content_niche);
+          if (savedNiche) $("ae-niche").value = L(savedNiche);
+        }
+        $("ae-micro").value = row.content_micro || "";
+        $("ae-nano").value = row.content_nano || "";
+        $("ae-nano").disabled = !$("ae-micro").value.trim();
+
+        const selectedHelp = new Set(
+          Object.values(HELP_SUBS)
+            .flat()
+            .filter((item) => state.data.helpSections.includes(item.en) || state.data.helpSections.includes(item.ar))
+            .map((item) => L(item))
+        );
+        root.querySelectorAll("#ae-help-tree input").forEach((input) => {
+          input.checked = selectedHelp.has(input.value) || state.data.helpSections.includes(input.value);
+        });
+
+        const publishAt = Date.parse(row.publish_at || "");
+        if (Number.isFinite(publishAt) && publishAt > Date.now()) {
           setWhen("later");
-          $("ae-when-at").value = String(row.publish_at).slice(0, 16);
+          const local = new Date(publishAt - new Date(publishAt).getTimezoneOffset() * 60000);
+          $("ae-when-at").value = local.toISOString().slice(0, 16);
         }
         syncThumb();
-
       }
     }
 
     wire($);
+    if (state.data.inHelp) setHelpMode(true);
     paintChips($);
     updateState();
   }
@@ -483,9 +546,6 @@
   }
 
   function buildSelects($) {
-    const fill = (sel, list, first) => {
-      sel.innerHTML = (first != null ? `<option value="">${esc(first)}</option>` : "") + list.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join("");
-    };
     const root = state.root;
     const field = root.querySelector("#ae-field");
     field.innerHTML = Object.keys(CONTENT).map((k) => `<option value="${k}">${esc(L(CONTENT[k]))}</option>`).join("");
@@ -495,14 +555,16 @@
     };
     niches();
     field.onchange = niches;
-    fill(root.querySelector("#ae-country"), COUNTRIES, t("ae.add"));
-    fill(root.querySelector("#ae-lang"), LANGS, t("ae.add"));
+    root.querySelector("#ae-country").innerHTML = `<option value="">${esc(t("ae.add"))}</option>` +
+      COUNTRIES.map((code) => `<option value="${esc(code)}">${esc(countryLabel(code))}</option>`).join("");
+    root.querySelector("#ae-lang").innerHTML = `<option value="">${esc(t("ae.add"))}</option>` +
+      LANGS.map((code) => `<option value="${esc(code)}">${esc(LANG_NAME[code])}</option>`).join("");
     root.querySelector("#ae-language").innerHTML = LANGS.map((l) => `<option value="${esc(l)}">${esc(LANG_NAME[l])}</option>`).join("");
     root.querySelector("#ae-tier").innerHTML = `<option value="">${esc(t("ae.noTier"))}</option>` + TIERS.map((x) => `<option value="${x}">${x}</option>`).join("");
     // the preview's reader simulator speaks the same vocabulary
     const simC = root.querySelector("#ae-s-country");
     const simL = root.querySelector("#ae-s-lang");
-    if (simC) simC.innerHTML = `<option value="">${esc(t("ae.sim.none"))}</option>` + COUNTRIES.map((c) => `<option>${esc(c)}</option>`).join("");
+    if (simC) simC.innerHTML = `<option value="">${esc(t("ae.sim.none"))}</option>` + COUNTRIES.map((c) => `<option value="${esc(c)}">${esc(countryLabel(c))}</option>`).join("");
     if (simL) simL.innerHTML = `<option value="">${esc(t("ae.sim.none"))}</option>` + LANGS.map((l) => `<option value="${l}">${esc(LANG_NAME[l])}</option>`).join("");
     const simT = root.querySelector("#ae-s-tier");
     if (simT) simT.innerHTML = `<option value="">${esc(t("ae.noTier"))}</option>` + TIERS.map((x) => `<option value="${x}">${x}</option>`).join("");
@@ -529,7 +591,7 @@
   function runCmd(cmd) {
     if (cmd === "image" || cmd === "video") return openMedia(cmd);
     restore();
-    if (cmd === "h2" || cmd === "h3" || cmd === "p") document.execCommand("formatBlock", false, cmd);
+    if (cmd === "h2" || cmd === "h3" || cmd === "p" || cmd === "blockquote") document.execCommand("formatBlock", false, cmd);
     else if (cmd === "link") {
       const u = prompt(t("ae.linkAsk"), "https://");
       if (u && SAFE_URL.test(u)) document.execCommand("createLink", false, u);
@@ -640,6 +702,31 @@
     el.textContent = parts.length ? parts.join(" · ") : t("ae.draft");
   }
 
+  function setHelpMode(enabled) {
+    const $ = state.$;
+    state.data.inHelp = Boolean(enabled);
+    $("ae-in-help").checked = state.data.inHelp;
+    $("ae-help-sub").classList.toggle("show", state.data.inHelp);
+    const buttons = $("ae-vis").querySelectorAll("button");
+    if (state.data.inHelp) {
+      // Help articles are always public; members' submissions wait for review.
+      setVis("public");
+      buttons.forEach((b) => {
+        b.disabled = true;
+        b.style.opacity = b.dataset.v === "public" ? "1" : ".45";
+      });
+      $("ae-vis-hint").textContent = t("ae.helpPublic");
+    } else {
+      buttons.forEach((b) => {
+        b.disabled = false;
+        b.style.opacity = "";
+      });
+      $("ae-vis-hint").textContent = t(`ae.vis.${state.data.vis}Hint`);
+    }
+    updateState();
+    syncPublishLabel();
+  }
+
   /* ---------- wiring ------------------------------------------------------- */
   function wire($) {
     const root = state.root;
@@ -653,32 +740,27 @@
     $("ae-when").querySelectorAll("button").forEach((b) => (b.onclick = () => setWhen(b.dataset.v)));
     $("ae-vis").querySelectorAll("button").forEach((b) => (b.onclick = () => setVis(b.dataset.v)));
 
+    const themeButton = $("ae-theme");
+    const syncThemeButton = () => {
+      const isDay = document.documentElement.dataset.theme === "day";
+      themeButton.textContent = isDay ? "☾" : "☀︎";
+      themeButton.setAttribute("aria-label", t("set.theme"));
+      themeButton.title = isDay ? "Switch to night mode" : "Switch to day mode";
+    };
+    themeButton.onclick = () => {
+      const theme = document.documentElement.dataset.theme === "day" ? "night" : "day";
+      C().applyPrefs?.({ theme, persist: true });
+      syncThemeButton();
+    };
+    document.addEventListener("cineaura:prefs", syncThemeButton);
+    syncThemeButton();
+
     $("ae-in-content").onchange = (e) => {
       state.data.inContent = e.target.checked;
       $("ae-content-sub").classList.toggle("show", e.target.checked);
       syncPublishLabel();
     };
-    $("ae-in-help").onchange = (e) => {
-      state.data.inHelp = e.target.checked;
-      $("ae-help-sub").classList.toggle("show", e.target.checked);
-      if (e.target.checked) {
-        // Help articles are always public (staff reach the section, members ask for it)
-        setVis("public");
-        $("ae-vis").querySelectorAll("button").forEach((b) => {
-          b.disabled = true;
-          b.style.opacity = b.dataset.v === "public" ? "1" : ".45";
-        });
-        $("ae-vis-hint").textContent = t("ae.helpPublic");
-      } else {
-        $("ae-vis").querySelectorAll("button").forEach((b) => {
-          b.disabled = false;
-          b.style.opacity = "";
-        });
-        $("ae-vis-hint").textContent = t(`ae.vis.${state.data.vis}Hint`);
-      }
-      updateState();
-      syncPublishLabel();
-    };
+    $("ae-in-help").onchange = (e) => setHelpMode(e.target.checked);
 
     $("ae-micro").oninput = (e) => {
       const nano = $("ae-nano");
@@ -816,6 +898,13 @@
       if (/^(IMG|VIDEO|IFRAME)$/.test(e.target.tagName)) showImgBar(e.target);
       else hideImgBar();
     });
+    body.addEventListener("keydown", hideImgBar);
+    document.addEventListener("mousedown", (e) => {
+      const bar = root.querySelector("#ae-imgbar");
+      if (state.cur && !bar?.contains(e.target) && !body.contains(e.target)) hideImgBar();
+    });
+    window.addEventListener("scroll", placeImgBar, { passive: true });
+    window.addEventListener("resize", placeImgBar);
   }
 
   /* ---------- floating media bar ------------------------------------------ */
@@ -826,7 +915,7 @@
     if (!bar) {
       bar = document.createElement("div");
       bar.id = "ae-imgbar";
-      root.appendChild(bar);
+      (root.querySelector(".ae-shell") || root).appendChild(bar);
       bar.onmousedown = (e) => e.preventDefault();
       bar.onclick = (e) => {
         const b = e.target.closest("button");
@@ -849,8 +938,22 @@
       "<i></i>" +
       ['right', 'center', 'left'].map((a) => `<button type="button" data-al="${a}" title="${esc(t("ae.al." + a))}">${esc(t("ae.al." + a))}</button>`).join("") +
       `<i></i><button type="button" data-del="1" title="${esc(t("ae.remove"))}">✕</button>`;
+    bar.classList.toggle("vid", el.tagName !== "IMG");
     bar.classList.add("on");
     syncImgBar();
+    placeImgBar();
+  }
+  function placeImgBar() {
+    const bar = state.root?.querySelector("#ae-imgbar");
+    if (!bar || !state.cur || !bar.classList.contains("on")) return;
+    const rect = state.cur.getBoundingClientRect();
+    const height = bar.offsetHeight || 40;
+    const width = bar.offsetWidth;
+    let top = rect.top - height - 8;
+    if (top < 8) top = Math.min(rect.bottom + 8, window.innerHeight - height - 8);
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2));
+    bar.style.top = `${Math.max(8, top)}px`;
+    bar.style.left = `${left}px`;
   }
   function hideImgBar() {
     state.cur?.removeAttribute("data-sel");
@@ -900,7 +1003,7 @@
     const d = state.data;
     const rows = [];
     if ($("ae-fol").checked) rows.push([t("ae.sim.followers"), v.follows, t("ae.followersOnly")]);
-    if (d.countries.length) rows.push([t("ae.country"), d.countries.includes(v.country), d.countries.join(" · ")]);
+    if (d.countries.length) rows.push([t("ae.country"), d.countries.includes(v.country), d.countries.map(countryLabel).join(" · ")]);
     if (d.languages.length) rows.push([t("ae.language"), d.languages.includes(v.language), d.languages.map((l) => LANG_NAME[l] || l).join(" · ")]);
     const a = Number($("ae-lvmin").value || 0);
     const b = Number($("ae-lvmax").value || 10);
@@ -1111,28 +1214,47 @@
     };
 
     const btn = $("ae-publish");
+    if (btn.disabled) return;
     btn.disabled = true;
     let res;
-    if (state.editId) {
-      // ownership re-read at execution time; staff may edit any article
-      const chk = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(state.editId)}&select=member_id`);
-      const owner = chk.ok && Array.isArray(chk.data) ? chk.data[0]?.member_id : null;
-      if (owner !== state.me.member_id && !staff) {
-        btn.disabled = false;
-        return C().toast(t("ae.forbidden"));
+    try {
+      if (state.editId) {
+        // ownership re-read at execution time; staff may edit any article
+        const chk = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(state.editId)}&select=member_id`);
+        const owner = chk.ok && Array.isArray(chk.data) ? chk.data[0]?.member_id : null;
+        if (owner !== state.me.member_id && !staff) {
+          btn.disabled = false;
+          return C().toast(t("ae.forbidden"));
+        }
+        res = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(state.editId)}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+      } else {
+        res = await req("/rest/v1/community_articles", { method: "POST", body: JSON.stringify(payload) });
       }
-      res = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(state.editId)}`, {
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      });
-    } else {
-      res = await req("/rest/v1/community_articles", { method: "POST", body: JSON.stringify(payload) });
+    } catch (error) {
+      console.error("Article save request failed", error);
+      btn.disabled = false;
+      return C().toast(t("ae.saveFail"));
     }
     btn.disabled = false;
-    if (!res.ok) return C().toast(t("ae.saveFail"));
+    if (!res?.ok) {
+      console.error("Article save failed", res?.status, res?.data);
+      return C().toast(t("ae.saveFail"));
+    }
     const row = Array.isArray(res.data) ? res.data[0] : null;
-    C().toast(payload.status === "pending" ? t("ae.sentReview") : t("ae.published"));
-    $("ae-state").textContent = payload.status === "pending" ? t("ae.pending") : t("ae.published");
+    const successText = payload.status === "pending"
+      ? t("ae.sentReview")
+      : d.when === "later"
+        ? t("ae.scheduled")
+        : t("ae.published");
+    C().toast(successText);
+    $("ae-state").textContent = payload.status === "pending"
+      ? t("ae.pending")
+      : d.when === "later"
+        ? t("ae.scheduled")
+        : t("ae.published");
     if (row?.id) setTimeout(() => (location.href = `./articles.html?id=${row.id}`), 700);
   }
 

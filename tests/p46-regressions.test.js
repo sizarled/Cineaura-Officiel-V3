@@ -125,7 +125,19 @@ has("community: public read policies", cs, 'com_q_read      on public.community_
 has("community: pgrst reload", cs, "notify pgrst, 'reload schema';");
 const cj = read("js/community.js");
 has("community: hub module", cj, "window.CineAuraCommunity = { viewCommunity, memberView, memberBlocks, memberGroups, openComposer, bootPage, homeRows };");
-has("community: question route", cj, '#q/${row.id}');
+has("community: question route works in hub and profile", cj, 'location.href = dLink("question", row.id);');
+has("community: question title is explicit", cj, 'name="title" maxlength="200" required');
+has("community: question body is required", cj, 'name="details" rows="7" maxlength="5000" required');
+has("community: attachment input accepts multiple any-type files", cj, 'type="file" multiple');
+has("community: question and answer saves include attachment metadata", cj, 'attachments,');
+has("community: question and answer attachments render", cj, 'attachmentHtml(a.attachments, "answer")');
+has("community: storage bucket is dedicated", cj, 'const QA_BUCKET = "community-attachments"');
+const qaSql = read("sql/community_qa_attachments.sql");
+has("community attachments: question metadata column", qaSql, "public.community_questions");
+has("community attachments: answer metadata column", qaSql, "public.community_answers");
+has("community attachments: public storage bucket", qaSql, "community-attachments");
+has("community attachments: file count limit", qaSql, "jsonb_array_length(attachments) <= 5");
+has("profile question composer: community styling", read("profile.html"), 'href="css/community.css"');
 has("community: deep-link router", cj, "const hashRoute = ()");
 has("community: helpful vote toggle", cj, "community_answer_votes");
 has("community: only boots on hub page", cj, 'if (root) paint(root);');
@@ -209,7 +221,7 @@ let crOk = crOrder.every((k, n) => kindsLine.indexOf(`"${k}"`) > (n === 0 ? -1 :
 ok("studio: kind order video > post > article > question > playlist > rec > reclist > review", crOk);
 has("create: video form embedded solo (no nested tabs)", pj3, 'window.CineAuraStudio.render(host, { member: state.me.member, solo: true, tab: "create" });');
 has("create: articles/questions reuse the hub composers", pj3, 'window.CineAuraCommunity.openComposer(host, kind)');
-has("create: guidance note (answers from the question page)", pj3, "${t(\"prof.cr.note\")}");
+has("create: question composer has focused guidance", read("js/community.js"), 't("com.askIntro")');
 { const head = pj3.slice(pj3.indexOf("async function viewCreate"), pj3.indexOf("async function viewCreate") + 2600);
   ok("create: no standalone Answer or Group tab", !/data-ck="answer"/.test(head) && !/#new-group/.test(head)); }
 const fe = read("js/i18n.js");
