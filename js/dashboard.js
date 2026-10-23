@@ -4305,8 +4305,11 @@
       const grid=$("#s-style-grid");
       if(grid){
         const renderGrid = ()=>{
+          const currentStyle = C.getStyle ? C.getStyle() : (window.CineauraTheme && window.CineauraTheme.getStyle ? window.CineauraTheme.getStyle() : "default");
+          const styleSelect = $("#s-style");
+          if(styleSelect) styleSelect.value = currentStyle;
           if(window.CineauraTheme && typeof window.CineauraTheme.renderPicker==="function"){
-            window.CineauraTheme.renderPicker(grid, (C.getStyle?C.getStyle():window.CineauraTheme.getStyle()));
+            window.CineauraTheme.renderPicker(grid, currentStyle);
             grid.querySelectorAll("[data-style-pick]").forEach(btn=>{
               btn.addEventListener("click", ()=>{
                 const v=btn.getAttribute("data-style-pick");

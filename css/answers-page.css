@@ -57,8 +57,8 @@ body.qa-editor-page .grain {
   --qa-muted: var(--muted, #9bb0c2);
   --qa-line: var(--line, rgba(145, 196, 220, .16));
   --qa-surface: var(--surface, rgba(9, 22, 36, .62));
-  --qa-input: var(--input-bg, rgba(4, 14, 24, .55));
-  --qa-sub: var(--sub-bg, rgba(255, 255, 255, .05));
+  --qa-input: var(--input, var(--input-bg, rgba(4, 14, 24, .55)));
+  --qa-sub: var(--sub, var(--sub-bg, rgba(255, 255, 255, .05)));
   --qa-shadow: var(--shadow, 0 24px 80px rgba(0, 0, 0, .42));
   width: 100%;
   max-width: 1240px;

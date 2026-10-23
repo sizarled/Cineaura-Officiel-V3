@@ -278,6 +278,29 @@
     document.dispatchEvent(new CustomEvent("cineaura:prefs", { detail: { language: lang, theme: mode, style: st } }));
   }
 
+  // Keep every open tab (including the Dashboard picker) on the same appearance.
+  // localStorage only sends this event to other tabs, so this does not recurse on
+  // the tab that made the change. Server preference writes remain with the caller.
+  window.addEventListener("storage", (event) => {
+    try {
+      if (event.storageArea && event.storageArea !== localStorage) return;
+      if (event.key !== null && ![LANG_KEY, THEME_KEY, STYLE_KEY].includes(event.key)) return;
+      if (event.key === null || event.key === LANG_KEY) {
+        activeLang = LANGS.includes(event.newValue) ? event.newValue : null;
+      }
+      if (event.key === null || event.key === THEME_KEY) {
+        activeTheme = event.newValue === "day" || event.newValue === "night" ? event.newValue : null;
+      }
+      if (event.key === null || event.key === STYLE_KEY) {
+        activeStyle = STYLE_VALS.includes(event.newValue) ? event.newValue : null;
+      }
+      prefsRevision++;
+      applyPrefs({ persist: false });
+    } catch {
+      /* storage can be disabled by the browser */
+    }
+  });
+
   let accountLangApplied = false; // the member's saved language beats the IP-based one
   async function hydratePrefsFromProfile() {
     const s = getSession();

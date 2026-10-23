@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="css/mobile.css" />
   <link rel="stylesheet" href="css/documents.css" />
   <link rel="stylesheet" href="css/community.css" />
+  <link rel="stylesheet" href="css/artheme.css" />
 </head>
 <body class="page-inner" data-auth-gate="note">
   <div class="bg-orbs" aria-hidden="true">
@@ -70,6 +71,19 @@
     <main class="page-main" id="prof-root"></main>
   </div>
   <div class="toast" id="toast" role="status"></div>
+  <button id="artheme-btn" class="auth-allow" type="button" aria-label="Appearance" data-i18n-aria="set.theme" aria-controls="artheme-panel" aria-haspopup="dialog" aria-expanded="false" title="Appearance">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+    <span class="at-dot" aria-hidden="true"></span>
+  </button>
+  <aside id="artheme-panel" class="auth-allow" role="dialog" aria-labelledby="artheme-heading" aria-hidden="true" inert>
+    <div class="at-head"><h3 id="artheme-heading" data-i18n="set.theme">Appearance</h3><button type="button" class="at-close" aria-label="Close" data-i18n-aria="common.close">&times;</button></div>
+    <div class="at-mode" role="radiogroup" aria-label="Color mode">
+      <button type="button" role="radio" data-mode="day" aria-checked="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg><span data-i18n="set.light">Light</span></button>
+      <button type="button" role="radio" data-mode="night" aria-checked="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg><span data-i18n="set.dark">Dark</span></button>
+    </div>
+    <div class="at-grid" role="radiogroup" aria-label="Theme style" data-i18n-aria="set.style"></div>
+    <div class="at-foot"><button type="button" class="at-reset">Reset</button><span class="at-cur" aria-live="polite"></span></div>
+  </aside>
   <script src="js/i18n.js"></script>
   <script src="js/lang.js"></script>
   <script src="js/common.js"></script>
@@ -81,5 +95,6 @@
   <script src="js/community.js"></script>
   <script src="js/documents.js"></script>
   <script src="js/profile.js"></script>
+  <script src="js/appearance-picker.js"></script>
 </body>
 </html>
