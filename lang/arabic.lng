@@ -5147,3 +5147,25 @@ Community hub = مركز المجتمع
 Article formatting tools = أدوات تنسيق المقال
 Sections and subsections = الأقسام والأقسام الفرعية
 Choose one or more subsections where this article should appear. = اختر قسمًا فرعيًا واحدًا أو أكثر ليظهر فيه المقال.
+
+# Community question and answer attachments
+Ask the community = اسأل المجتمع
+Give your question a clear title, then explain it below. Attach files if they help. = اكتب عنوانًا واضحًا لسؤالك، ثم اشرح التفاصيل أدناه. أرفق الملفات إذا كانت مفيدة.
+Give your question a clear title, explain it below, and attach any useful files. Answers can be added on the question page. = اكتب عنوانًا واضحًا لسؤالك واشرحه أدناه، وأرفق الملفات المفيدة. يمكن إضافة الإجابات من صفحة السؤال.
+What is your question about? = ما موضوع سؤالك؟
+Your question = سؤالك
+Describe your question in detail… = اشرح سؤالك بالتفصيل…
+Add both a title and the question details. = أدخل عنوان السؤال وتفاصيله.
+Write an answer = اكتب إجابة
+Share a clear, helpful answer. Attach files if they add useful context. = قدّم إجابة واضحة ومفيدة. أرفق ملفات إذا أضافت سياقًا مفيدًا.
+Write an answer before posting. = اكتب إجابتك قبل النشر.
+Attachments = المرفقات
+Choose files or drop them here = اختر الملفات أو اسحبها وأفلتها هنا
+Any file type · Up to 5 files · 50 MB each · 100 MB total = أي نوع من الملفات · حتى 5 ملفات · 50 ميغابايت لكل ملف · 100 ميغابايت إجمالًا
+Remove {name} = إزالة {name}
+Uploading attachment {current} of {total}… = جارٍ رفع المرفق {current} من {total}…
+Posting… = جارٍ النشر…
+Could not upload attachments. Check the connection, storage setup, and file size. = تعذّر رفع المرفقات. تحقق من الاتصال وإعدادات التخزين وحجم الملفات.
+Each file must be 50 MB or less. = يجب ألا يتجاوز حجم كل ملف 50 ميغابايت.
+Attach up to {max} files. = يمكن إرفاق ما يصل إلى {max} ملفات.
+Attachments must total {max} or less. = يجب ألا يتجاوز الحجم الإجمالي للمرفقات {max}.
