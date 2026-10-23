@@ -185,22 +185,26 @@ Reactivation stays available for every plan, Free included.
    straight there; images land in `source/Platforms/Photos`, videos in
    `source/Platforms/Videos`, both public, ready for the networks to pull.
 4. The footer of the home page shows the enabled networks (`platforms_public()`).
-5. Deploy the sender and schedule it:
+5. Deploy the sender **without gateway JWT verification**; the function validates a
+   short-lived HMAC proof against a secret held in Supabase Vault before it can
+   read or publish queue rows. Do not remove that in-function check:
 
 ```bash
-supabase functions deploy platform-publish
-supabase secrets set SUPABASE_URL=https://samazxadqggoeilaqfdp.supabase.co \
-  SUPABASE_SERVICE_ROLE_KEY=<service role key>
+supabase functions deploy platform-publish --no-verify-jwt
 ```
 
-In the SQL editor (pg_cron must be enabled for the project), daily 09:00 UTC:
+6. Run `sql/platform_publish_schedule.sql` once after deploying the function. It
+   enables `pg_net`, creates a random signing secret directly in Vault, grants
+   the verifier RPC to `service_role` only, and installs/replaces the daily 09:00
+   UTC `pg_cron` job. It does not put a service-role key or signing secret in the
+   SQL file or cron command. Supabase injects its standard URL/service key into
+   Edge Functions; do not copy those values into the repository.
 
-```sql
-select cron.schedule('platform-publish-daily', '0 9 * * *',
-  $$ select net.http_post(
-    url:='https://samazxadqggoeilaqfdp.supabase.co/functions/v1/platform-publish',
-    headers:='{"Authorization":"Bearer <service role key>"}'::jsonb) $$);
-```
+The endpoint rejects unsigned requests. The cron job calls it with a rotating
+five-minute proof and publishes at most 20 due posts per run. Only platforms
+with valid credentials (or a webhook URL) can publish; others report their
+credential/API error in Panel > Platforms.
+
 
 Native publishers: YouTube (OAuth refresh token), Facebook page/group
 (photo & video), Instagram Business (container), TikTok (Pull-from-URL),

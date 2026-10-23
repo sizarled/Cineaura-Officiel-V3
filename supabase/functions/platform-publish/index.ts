@@ -1,13 +1,12 @@
 // platform-publish — the scheduled sender of Panel > Platforms (sql/platforms.sql).
 //
-//   Deploy  supabase functions deploy platform-publish
-//   Secrets supabase secrets set SUPABASE_URL=https://samazxadqggoeilaqfdp.supabase.co \
-//             SUPABASE_SERVICE_ROLE_KEY=<service role key>    (never the anon key)
-//   Run     manual: curl -i -X POST <function-url>            (returns a report)
-//           or pg_cron (SQL editor), every day 09:00 UTC:
-//             select  cron.schedule('platform-publish-daily', '0 9 * * *',
-//               $$ select net.http_post(url:='https://samazxadqggoeilaqfdp.supabase.co/functions/v1/platform-publish',
-//                 headers:='{"Authorization":"Bearer <service role key>"}'::jsonb) $$);
+//   Deploy with the Supabase Edge Function connector / CLI. The gateway JWT check
+//   is disabled because pg_cron signs each request with a short-lived HMAC bucket;
+//   the function validates that proof through a service-role-only SQL RPC before
+//   reading the queue. The secret itself is generated and retained in Supabase Vault.
+//   `sql/platform_publish_schedule.sql` installs the verifier and daily 09:00 UTC job.
+//   Do not expose this function without the HMAC verifier below.
+
 //
 // WHAT A RUN DOES
 //   reads platform_posts (pending/failed, oldest first, ≤20) + platform_settings,
@@ -229,7 +228,30 @@ export const PUBLISHERS: Record<string, (c: Creds, r: Row, key: string) => Promi
 
 Deno.serve(async (req) => {
   if (!SUPABASE_URL || !SERVICE_KEY) return json({ ok: false, reason: "not_configured" }, 500);
-  if (req.method !== "POST" && req.method !== "GET") return json({ ok: false, reason: "method" }, 405);
+  if (req.method !== "POST") return json({ ok: false, reason: "method" }, 405);
+
+  // Supabase's edge gateway is configured with verify_jwt=false so pg_cron can
+  // invoke this endpoint without holding a service-role JWT. Instead, the DB job
+  // sends a five-minute bucket and its SHA-256 proof. The secret stays in Vault;
+  // this RPC exposes only a boolean and is executable only by service_role.
+  const bucketText = req.headers.get("x-cineaura-publish-bucket") || "";
+  const signature = req.headers.get("x-cineaura-publish-signature") || "";
+  if (!/^[0-9]{1,12}$/.test(bucketText) || !/^[a-f0-9]{64}$/i.test(signature)) {
+    return json({ ok: false, reason: "unauthorized" }, 401);
+  }
+
+  let authorization;
+  try {
+    authorization = await rest("rpc/platform_publish_authorize", {
+      method: "POST",
+      body: JSON.stringify({ p_bucket: Number(bucketText), p_signature: signature.toLowerCase() }),
+    });
+  } catch {
+    return json({ ok: false, reason: "auth_check_unavailable" }, 503);
+  }
+  if (!authorization.ok || authorization.data !== true) {
+    return json({ ok: false, reason: "unauthorized" }, 401);
+  }
 
   const settings = await rest(`platform_settings?select=*`);
   if (!settings.ok) return json({ ok: false, reason: "settings_read", detail: settings.data }, 500);
