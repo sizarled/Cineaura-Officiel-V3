@@ -3364,7 +3364,9 @@
     applyPrefs({ persist: false });
     initSettingsMenu();
     geoBoot();
-    welcomeSettingsOnce();
+    // A frameless utility page has no settings control to reopen the dialog;
+    // don't interrupt its task with the site-wide first-visit welcome modal.
+    if (document.getElementById("site-header")) welcomeSettingsOnce();
     startPresence();
     renderAuth();
     // No session on a page that needs one: lock it before any handler is bound.

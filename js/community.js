@@ -218,9 +218,15 @@
   }
 
   // ─────────────────────────── articles ───────────────────────────
+  function articleIsPublicNow(row) {
+    if (!row || ["draft", "pending"].includes(String(row.status || "published"))) return false;
+    const publishAt = Date.parse(row.publish_at || "");
+    return !Number.isFinite(publishAt) || publishAt <= Date.now();
+  }
+
   async function listArticles(box) {
     const res = await req("/rest/v1/community_articles?select=*&order=created_at.desc&limit=80");
-    const rows = res.ok && Array.isArray(res.data) ? res.data : [];
+    const rows = res.ok && Array.isArray(res.data) ? res.data.filter(articleIsPublicNow) : [];
     if (!res.ok) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))}</p>`);
     if (!rows.length)
       return (box.innerHTML = `<p class="com-empty muted">${esc(t("com.emptyA"))} <a class="btn btn-sm btn-primary" href="#new-article">${esc(t("com.newArticle"))}</a></p>`);
@@ -278,8 +284,11 @@
         body: JSON.stringify({ views: Number(a.views || 0) + 1 }),
       }).catch(() => {});
 
-    // A draft (or a Help article awaiting a moderator) is not public yet.
+    // Drafts, Help submissions awaiting review, and scheduled articles stay private until released.
     if (a.status === "draft" && !mine)
+      return (box.innerHTML = `<a class="com-back" href="${back}">← ${esc(t("com.backList"))}</a>
+        <p class="com-note">🔒 ${esc(t("ae.notPublished"))}</p>`);
+    if (!articleIsPublicNow(a) && !mine)
       return (box.innerHTML = `<a class="com-back" href="${back}">← ${esc(t("com.backList"))}</a>
         <p class="com-note">🔒 ${esc(t("ae.notPublished"))}</p>`);
 
@@ -729,8 +738,11 @@
   // same rows the lists draw, so both always look and link the same way.
   async function homeRows(box, kind, limit) {
     const table = kind === "questions" ? "community_questions" : "community_articles";
-    const res = await req(`/rest/v1/${table}?select=*&order=created_at.desc&limit=${Math.max(1, Number(limit) || 4)}`);
-    const rows = res.ok && Array.isArray(res.data) ? res.data : [];
+    const take = Math.max(1, Number(limit) || 4);
+    const fetchLimit = kind === "questions" ? take : Math.max(80, take);
+    const res = await req(`/rest/v1/${table}?select=*&order=created_at.desc&limit=${fetchLimit}`);
+    const fetched = res.ok && Array.isArray(res.data) ? res.data : [];
+    const rows = (kind === "questions" ? fetched : fetched.filter(articleIsPublicNow)).slice(0, take);
     if (!res.ok) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))}</p>`);
     if (!rows.length) return (box.innerHTML = `<p class="com-empty muted">${esc(t(kind === "questions" ? "com.emptyQ" : "com.emptyA"))}</p>`);
     const names = await nameMap(rows.map((r) => r.member_id));
