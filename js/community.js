@@ -1371,11 +1371,12 @@
   // adds to it (the hub's own composers — no second form here).
   function pageHead(kind) {
     const isQ = kind === "questions";
-    return `<div class="pg-head">
-        <span class="eyebrow">${esc(t("ct.eyebrow"))}</span>
-        <h1>${esc(t(PAGE_TITLES[kind]))}</h1>
-        <p class="muted">${esc(t(isQ ? "ct.leadQuestions" : "ct.leadArticles"))}</p>
-        <div class="pg-acts">
+    const intro = `<span class="eyebrow">${esc(t("ct.eyebrow"))}</span>
+      <h1>${esc(t(PAGE_TITLES[kind]))}</h1>
+      <p class="muted">${esc(t(isQ ? "ct.leadQuestions" : "ct.leadArticles"))}</p>`;
+    return `<div class="pg-head${isQ ? " qa-page-head" : ""}">
+        ${isQ ? `<div class="qa-page-head-copy">${intro}</div>` : intro}
+        <div class="pg-acts${isQ ? " qa-page-actions" : ""}">
           ${isQ
             ? `<a class="btn btn-sm btn-primary" href="./answers.html#ask">❓ ${esc(t("com.ask"))}</a>`
             : `<a class="btn btn-sm btn-primary" href="./article-Editor.html">✍ ${esc(t("com.newArticle"))}</a>`}

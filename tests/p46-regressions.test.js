@@ -183,7 +183,17 @@ has("questions: answers page mounts the ask form at #ask", cj2, 'kind === "quest
 has("questions: dedicated page CTA opens its ask form", cj2, 'href="./answers.html#ask"');
 has("questions: dedicated page links back to groups", cj2, 'href="${isQ ? "./community.html" : "./community.html#articles"}"');
 has("questions: community footer targets answers page", read("community.html"), '<a href="./answers.html" data-i18n="com.tab.questions">');
-has("content pages: one type bar, marked up on every page", read("articles.html") + read("video.html") + read("answers.html") + read("documents.html"), 'class="com-tabs ct-bar"');
+const ansPage = read("answers.html");
+has("questions: article-editor-inspired page styling", ansPage, 'href="css/answers-page.css"');
+has("questions: floating theme picker on dedicated page", ansPage, 'id="qa-theme-trigger"');
+has("questions: theme picker module loaded", ansPage, 'src="js/qa-theme-picker.js"');
+has("questions: dedicated root uses article-editor styling", ansPage, 'class="qa-page-root" data-kind="questions"');
+const qtp = read("js/qa-theme-picker.js");
+has("questions: page uses shared fourteen-style picker", qtp, "themeApi.renderPicker(grid, app.getStyle?.() || \"default\")");
+has("questions: day/night is saved via shared preferences", qtp, "app.applyPrefs?.({ ...prefs, persist: true });");
+has("questions: appearance choice syncs to profile", qtp, 'method: "PATCH"');
+has("questions: Q&A form uses editor-style card theme variables", read("css/answers-page.css"), "--qa-surface: var(--surface");
+has("content pages: one type bar, marked up on every page", read("articles.html") + read("video.html") + ansPage + read("documents.html"), 'class="com-tabs ct-bar"');
 has("groups: content.html loads community module", read("content.html"), 'src="js/community.js"');
 has("groups: engine discover label", read("js/i18n.js"), '"grp.discover": "Discover Groups"');
 
