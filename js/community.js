@@ -10,9 +10,9 @@
   }
 
 /* CineAura — Community hub (js/community.js, sql/community.sql)
-   Articles + Questions & Answers in one place. Public to browse; a signed-in
-   member asks, answers, votes "helpful" and publishes articles.
-   Deep links: community.html · #ask · #new-article · #q/123 · #a/45 · #articles
+   The hub is for groups; Questions & Answers and Articles have dedicated pages.
+   Public to browse; a signed-in member asks, answers, votes "helpful" and publishes articles.
+   Q&A deep links: answers.html · #ask · ?id=123; old community.html Q&A hashes redirect.
    The profile renders its Community section through memberView(main, memberId). */
 (() => {
   const C = () => window.CineAura;
@@ -36,24 +36,29 @@
   }
   const who = (names, id) => (names.get(id) ? `@${names.get(id)}` : "");
   const when = (iso) => String(iso || "").slice(0, 16).replace("T", " ");
-  // Question/article links: relative #… on the hub itself, absolute ./community.html#…
-  // when the same renderer is embedded on another page (the type pages, the profile).
+  // Group links stay in the hub; Q&A/article links go to their dedicated pages.
   const base = () => (document.getElementById("com-root") ? "" : "./community.html");
   const loginNote = () =>
     meId() ? "" : `<p class="com-note muted">${esc(t("com.login"))} <a class="btn btn-sm btn-primary" href="./login.html">${esc(t("nav.signin"))}</a></p>`;
 
   const gLink = (id) => (base() ? `${base()}?group=${id}` : `?group=${id}`);
-  // Deep links: on the hub the detail views live under #q/ #a/ hashes; everywhere
-  // else they point at the page that owns the type, one id on it (round 39):
-  // articles.html?id= / answers.html?id= (one question or one answer).
+  // Deep links always open the page that owns the content type (round 39).
+  // Question and answer IDs share answers.html; kind=answer selects an answer.
   const DEEP_PAGE = { article: "articles", question: "answers", answer: "answers" };
-  // The list a detail view goes back to: its own type's page (the hub keeps its
-  // own tabs, so # there; everywhere else a real page).
-  const listHref = (kind) => (document.getElementById("com-root") ? (kind === "article" ? "#articles" : "#questions") : `./${DEEP_PAGE[kind]}.html`);
-  const dLink = (kind, id) =>
-    document.getElementById("com-root")
-      ? `#${kind === "article" ? "a" : "q"}/${id}`
-      : `./${DEEP_PAGE[kind] || "answers"}.html?id=${encodeURIComponent(id)}`;
+  // Q&A always returns to its dedicated page; articles keep the hub's legacy
+  // hash alias when opened there, otherwise they return to articles.html.
+  const listHref = (kind) => {
+    if (kind === "question" || kind === "answer") return "./answers.html";
+    return document.getElementById("com-root") ? "#articles" : `./${DEEP_PAGE[kind]}.html`;
+  };
+  const dLink = (kind, id) => {
+    const encoded = encodeURIComponent(id);
+    if (kind === "question") return `./answers.html?id=${encoded}`;
+    if (kind === "answer") return `./answers.html?id=${encoded}&kind=answer`;
+    if (kind === "article")
+      return document.getElementById("com-root") ? `#a/${encoded}` : `./articles.html?id=${encoded}`;
+    return `./${DEEP_PAGE[kind] || "answers"}.html?id=${encoded}`;
+  };
   const groupParam = () => new URLSearchParams(location.search).get("group");
   // Community.html?group=12345 picks the group page; plain Community.html picks
   // the list. #g/123 stays as a legacy alias so old links never break.
@@ -284,7 +289,7 @@
     const rows = res.ok && Array.isArray(res.data) ? res.data : [];
     if (!res.ok) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))}</p>`);
     if (!rows.length)
-      return (box.innerHTML = `<p class="com-empty muted">${esc(t("com.emptyQ"))} <a class="btn btn-sm btn-primary" href="#ask">${esc(t("com.ask"))}</a></p>`);
+      return (box.innerHTML = `<p class="com-empty muted">${esc(t("com.emptyQ"))} <a class="btn btn-sm btn-primary" href="./answers.html#ask">${esc(t("com.ask"))}</a></p>`);
     const names = await nameMap(rows.map((r) => r.member_id));
     box.innerHTML = rows
       .map(
@@ -322,7 +327,8 @@
     const form = box.querySelector("#com-ask");
     const selectedFiles = bindAttachmentPicker(form, "com-question-files");
     form.querySelector("[data-com-cancel]").onclick = () => {
-      if (document.getElementById("com-root")) location.hash = "#questions";
+      const page = document.getElementById("page-root");
+      if (page?.dataset.kind === "questions" || document.getElementById("com-root")) location.href = "./answers.html";
       else location.href = "./profile.html?section=community";
     };
     form.onsubmit = async (e) => {
@@ -1156,8 +1162,27 @@
     });
   }
 
+  // Old Q&A fragments on community.html now open the dedicated Q&A page.
+  // Check the hash before hashRoute() so even a stale ?group= value cannot
+  // swallow #ask/#questions and leave the visitor on a group page.
+  function redirectCommunityQARoute(root) {
+    if (root !== document.getElementById("com-root")) return false;
+    const hash = String(location.hash || "").replace(/^#/, "").toLowerCase();
+    let target = "";
+    if (hash === "ask") target = "./answers.html#ask";
+    else if (hash === "questions") target = "./answers.html";
+    else {
+      const question = hash.match(/^q\/(\d+)$/);
+      if (question) target = `./answers.html?id=${question[1]}`;
+    }
+    if (!target) return false;
+    location.replace(target);
+    return true;
+  }
+
   // ─────────────────────────── hub shell ───────────────────────────
   function paint(root) {
+    if (redirectCommunityQARoute(root)) return;
     const route = hashRoute();
     // Legacy content routes keep the Articles / Q&A tab bar; the hub's default
     // face is the Groups (Discover / My Groups / Create).
@@ -1170,7 +1195,7 @@
           <button type="button" role="tab" class="follow-tab${route.tab === "articles" ? " active" : ""}" data-tab="articles">${esc(t("com.tab.articles"))}</button>
         </div>
         <div id="com-acts">
-          ${route.tab === "questions" ? `<a class="btn btn-sm btn-primary" href="#ask">❓ ${esc(t("com.ask"))}</a>` : `<a class="btn btn-sm btn-primary" href="#new-article">✍ ${esc(t("com.newArticle"))}</a>`}
+          ${route.tab === "questions" ? `<a class="btn btn-sm btn-primary" href="./answers.html#ask">❓ ${esc(t("com.ask"))}</a>` : `<a class="btn btn-sm btn-primary" href="#new-article">✍ ${esc(t("com.newArticle"))}</a>`}
         </div>
         <div id="com-body"><p class="com-note muted">${esc(t("common.loading"))}</p></div>`;
     else
@@ -1185,7 +1210,9 @@
       : `<p class="eyebrow">${esc(t("com.eyebrow"))}</p><h1>${esc(t("grp.title"))}</h1><p class="com-lead muted">${esc(t("grp.lead"))}</p>`;
     root.innerHTML = head + inner;
     const body = root.querySelector("#com-body");
-    root.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => (location.hash = b.dataset.tab === "articles" ? "#articles" : "#questions")));
+    root.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
+      location.href = b.dataset.tab === "articles" ? "./articles.html" : "./answers.html";
+    }));
     root.querySelectorAll("[data-gtab]").forEach((b) => (b.onclick = () => (location.hash = b.dataset.gtab === "my" ? "#my-groups" : "#")));
     if (route.view === "question") return questionView(body, route.id);
     if (route.view === "article") return articleView(body, route.id);
@@ -1246,7 +1273,7 @@
   // creation shortcuts and the link back to the hub.
   async function memberView(main, memberId) {
     main.innerHTML = `<p class="eyebrow">${esc(t("com.eyebrow"))}</p><h1>${esc(t("com.title"))}</h1>
-      <div class="com-acts"><a class="btn btn-sm btn-primary" href="./community.html#ask">❓ ${esc(t("com.ask"))}</a>
+      <div class="com-acts"><a class="btn btn-sm btn-primary" href="./answers.html#ask">❓ ${esc(t("com.ask"))}</a>
       <a class="btn btn-sm btn-primary" href="./community.html#new-article">✍ ${esc(t("com.newArticle"))}</a>
       <a class="btn btn-sm btn-ghost" href="./community.html">🌐 ${esc(t("com.openHub"))}</a></div>
       <div id="com-mb"><p class="com-note muted">${esc(t("common.loading"))}</p></div>`;
@@ -1350,9 +1377,9 @@
         <p class="muted">${esc(t(isQ ? "ct.leadQuestions" : "ct.leadArticles"))}</p>
         <div class="pg-acts">
           ${isQ
-            ? `<a class="btn btn-sm btn-primary" href="./community.html#ask">❓ ${esc(t("com.ask"))}</a>`
+            ? `<a class="btn btn-sm btn-primary" href="./answers.html#ask">❓ ${esc(t("com.ask"))}</a>`
             : `<a class="btn btn-sm btn-primary" href="./article-Editor.html">✍ ${esc(t("com.newArticle"))}</a>`}
-          <a class="btn btn-sm btn-ghost" href="./community.html#${isQ ? "questions" : "articles"}">${esc(t("ct.hub"))}</a>
+          <a class="btn btn-sm btn-ghost" href="${isQ ? "./community.html" : "./community.html#articles"}">${esc(t("ct.hub"))}</a>
         </div>
       </div>`;
   }
@@ -1388,6 +1415,11 @@
         articleView(root, Number(id));
       }
       return true;
+    }
+    if (kind === "questions" && String(location.hash || "").toLowerCase() === "#ask") {
+      root.innerHTML = `${pageHead(kind)}<div id="pg-ask"></div>`;
+      askForm(root.querySelector("#pg-ask"));
+      return false;
     }
     if (kind === "documents") {
       root.innerHTML = `<div class="pg-head">
