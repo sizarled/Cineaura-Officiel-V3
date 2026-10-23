@@ -310,9 +310,22 @@ has("article editor: reader gate mirrors the promises", aem, "function canRead(r
 has("article editor: private gate by listed users", aem, "return Boolean(viewer && users.includes(viewer.username));");
 has("article editor: body rendered sanitised on the public page", aem, "if (row.body_html) return sanitize(row.body_html);");
 const cja = read("js/community.js");
+// The public article viewer is backed by editor rows, not the prototype's fixtures.
+has("article reader: published public list reads community_articles", cja, "select=${ARTICLE_SUMMARY_FIELDS}&status=eq.published&visibility=eq.public");
+has("article reader: hidden, scheduled and Help-only rows are filtered", cja, "function articleIsContentPublished(row)");
+has("article reader: access preflight reads no body fields", cja, "select=${ARTICLE_ACCESS_FIELDS}");
+has("article reader: gated access is checked before fetching the body", cja, "// Once permitted, load the author-facing fields and sanitized rich body.");
+has("article reader: rich editor HTML is sanitized at render", cja, "A?.bodyHtml ? A.bodyHtml(a)");
+has("article reader: author joins member and profile records", cja, "C().profilesByIds(uniq, ARTICLE_AUTHOR_PROFILE_FIELDS)");
+has("article reader: author opens the real profile route", cja, "./profile.html?@${encodeURIComponent(username)}");
+has("article reader: article reading time is estimated from words", cja, "Math.ceil(words / 200)");
+has("article reader: suggestions come from public community articles", cja, "async function renderRelatedArticles(box, current)");
+has("article reader: followers-only access checks an accepted follow", cja, "status=eq.accepted&select=id&limit=1");
+has("article reader: article can be shared with the common share widget", cja, "C().shareRowHtml(dLink(\"article\", a.id)");
+ok("article reader: no password fields or static prototype fixtures", !/ARTICLE_DETAIL_FIELDS[^;]*private_passwords/.test(cja) && !/community_articles[^`]*select=\*/.test(cja) && !/const ARTICLES\s*=|const COMMENTS\s*=/.test(cja));
 has("article editor: New article opens it", cja, 'location.href = "./article-Editor.html";');
-has("article editor: article page uses the rich body", cja, "const body = A ? A.bodyHtml(a) :");
-has("article editor: drafts stay private", cja, 'if (a.status === "draft" && !mine)');
+has("article editor: article page uses the rich body", cja, "const body = A?.bodyHtml ? A.bodyHtml(a) :");
+has("article editor: drafts and unpublished rows stay private", cja, "if (!mine && articleIsContentPublished(gateRow))");
 const pfa = read("js/profile.js");
 has("article editor: studio Article opens it", pfa, '<a class="btn btn-primary" href="./article-Editor.html">${escapeHtml(t("ae.openEditor"))}</a>');
 const pna = read("js/panel-admin.js");

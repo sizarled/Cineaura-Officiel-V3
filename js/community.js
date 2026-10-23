@@ -479,28 +479,221 @@
   }
 
   // ─────────────────────────── articles ───────────────────────────
+  // Reader queries deliberately select only display fields. In particular, never
+  // return private_passwords as part of a public article-list response.
+  const ARTICLE_SUMMARY_FIELDS = "id,member_id,title,description,body,language,categories,tags,thumb,views,created_at,publish_at,status,visibility,places";
+  const ARTICLE_ACCESS_FIELDS = "id,member_id,status,publish_at,visibility,places";
+  const ARTICLE_DETAIL_FIELDS = `${ARTICLE_SUMMARY_FIELDS},body_html`;
+  const ARTICLE_AUTHOR_PROFILE_FIELDS = [
+    "member_id", "username", "avatar_url", "bio", "followers", "following",
+    "display_name", "membership_type", "language",
+  ];
+  const ARTICLE_VIEWER_PROFILE_FIELDS = ["member_id", "language", "country", "level", "tier"];
+
+  function articleHasContentPlacement(row) {
+    const places = String(row?.places ?? "content").trim().toLowerCase();
+    if (!places) return true;
+    return places.split(/[+,|\s]+/).some((place) => place === "content" || place === "both");
+  }
+
+  function articleIsReleased(row) {
+    if (!row || String(row.status || "published").trim().toLowerCase() !== "published") return false;
+    if (!row.publish_at) return true;
+    const publishAt = Date.parse(row.publish_at);
+    return Number.isFinite(publishAt) && publishAt <= Date.now();
+  }
+
+  function articleIsContentPublished(row) {
+    return articleIsReleased(row) && articleHasContentPlacement(row);
+  }
+
+  // The public library, home page and recommendations expose only public,
+  // published articles explicitly placed in Content (not drafts, Help-only or scheduled rows).
   function articleIsPublicNow(row) {
-    if (!row || ["draft", "pending"].includes(String(row.status || "published"))) return false;
-    const publishAt = Date.parse(row.publish_at || "");
-    return !Number.isFinite(publishAt) || publishAt <= Date.now();
+    return articleIsContentPublished(row) && String(row.visibility || "public").trim().toLowerCase() === "public";
+  }
+
+  function articleCategories(row) {
+    return String(row?.categories || row?.tags || "")
+      .split(/[,;|\n]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+
+  function articlePlainText(row) {
+    const A = window.CineAuraArticles;
+    const safeHtml = A?.bodyHtml ? A.bodyHtml(row) : `<p>${esc(row?.body || "")}</p>`;
+    const node = document.createElement("div");
+    node.innerHTML = safeHtml;
+    return String(node.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  function articleReadMinutes(row) {
+    const words = articlePlainText(row).split(/\s+/).filter(Boolean).length;
+    return Math.max(1, Math.ceil(words / 200));
+  }
+
+  function articleReadTimeLabel(minutes) {
+    const lang = C()?.getLang?.() || "en";
+    const labels = {
+      ar: minutes === 1 ? "دقيقة قراءة" : "دقائق قراءة",
+      en: "min read",
+      fr: "min de lecture",
+      es: "min de lectura",
+      de: "Min. Lesezeit",
+      nl: "min leestijd",
+      it: "min di lettura",
+    };
+    return `${minutes} ${labels[lang] || labels.en}`;
+  }
+
+  function articleDate(value) {
+    return C()?.formatDate ? C().formatDate(value) : when(value);
+  }
+
+  function articleNumber(value) {
+    const number = Math.max(0, Number(value) || 0);
+    try {
+      return new Intl.NumberFormat(C()?.getLocale?.() || undefined, { notation: "compact", maximumFractionDigits: 1 }).format(number);
+    } catch {
+      return String(number);
+    }
+  }
+
+  function safeArticleImageUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(raw)) return raw;
+    try {
+      const url = new URL(raw, location.href);
+      if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+      return url.origin === location.origin ? `${url.pathname}${url.search}${url.hash}` : url.href;
+    } catch {
+      return "";
+    }
+  }
+
+  function articleImage(row) {
+    const fromThumb = safeArticleImageUrl(row?.thumb);
+    if (fromThumb) return fromThumb;
+    const A = window.CineAuraArticles;
+    const safeHtml = A?.bodyHtml ? A.bodyHtml(row) : `<p>${esc(row?.body || "")}</p>`;
+    const parsed = new DOMParser().parseFromString(safeHtml, "text/html");
+    return safeArticleImageUrl(parsed.querySelector("img")?.getAttribute("src"));
+  }
+
+  function articleCoverMarkup(row, className, alt = "") {
+    const src = articleImage(row);
+    return src
+      ? `<img class="${className}" src="${esc(src)}" alt="${esc(alt)}" loading="lazy" />`
+      : `<span class="${className} ar-cover-placeholder" aria-hidden="true">✍</span>`;
+  }
+
+  // The author display joins the safe public member fields and profile fields in
+  // parallel; profilesByIds handles optional/older profile columns gracefully.
+  async function articleAuthorsByIds(ids) {
+    const uniq = [...new Set((ids || []).map((id) => String(id || "")).filter(Boolean))];
+    if (!uniq.length) return new Map();
+    const [members, profiles] = await Promise.all([
+      req(`/rest/v1/members?member_id=in.(${idsIn(uniq)})&select=member_id,username,full_name`).catch(() => ({ ok: false, data: [] })),
+      C()?.profilesByIds
+        ? C().profilesByIds(uniq, ARTICLE_AUTHOR_PROFILE_FIELDS).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    const memberRows = members?.ok && Array.isArray(members.data) ? members.data : [];
+    const profileRows = Array.isArray(profiles) ? profiles : [];
+    const memberMap = new Map(memberRows.map((row) => [String(row.member_id), row]));
+    const profileMap = new Map(profileRows.map((row) => [String(row.member_id), row]));
+    return new Map(uniq.map((id) => {
+      const member = memberMap.get(id) || {};
+      const profile = profileMap.get(id) || {};
+      const username = String(profile.username || member.username || "").replace(/^@/, "");
+      return [id, {
+        ...member,
+        ...profile,
+        member_id: id,
+        username,
+        full_name: member.full_name || "",
+        display_name: String(profile.display_name || member.full_name || username || "CineAura member"),
+        avatar_url: profile.avatar_url || "",
+      }];
+    }));
+  }
+
+  function articleProfileHref(author) {
+    const username = String(author?.username || "").replace(/^@/, "").trim();
+    return username ? `./profile.html?@${encodeURIComponent(username)}` : "";
+  }
+
+  function articleAvatar(author, className = "ar-author-avatar") {
+    const id = String(author?.member_id || "");
+    const username = String(author?.username || "");
+    const name = String(author?.display_name || author?.full_name || username || "CA");
+    const Cn = C();
+    const src = safeArticleImageUrl(author?.avatar_url) || Cn?.avatarSrc?.(id, username, name) || Cn?.initialsAvatar?.(name) || "";
+    return `<img class="${className}" src="${esc(src)}" alt="" data-avatar-for="${esc(id)}" data-avatar-name="${esc(username || name)}" loading="lazy" />`;
+  }
+
+  function articleAuthorCard(author) {
+    const profile = author || {};
+    const href = articleProfileHref(profile);
+    const open = href ? `<a class="ar-author-profile" href="${esc(href)}">` : `<div class="ar-author-profile">`;
+    const close = href ? "</a>" : "</div>";
+    const language = String(profile.language || "");
+    const languageName = C()?.LANG_NAMES?.[language] || language;
+    const membership = String(profile.membership_type || "");
+    const stats = [];
+    if (profile.followers != null) stats.push(`<span><b>${esc(articleNumber(profile.followers))}</b> ${esc(t("prof.followers"))}</span>`);
+    if (profile.following != null) stats.push(`<span><b>${esc(articleNumber(profile.following))}</b> ${esc(t("prof.followingN"))}</span>`);
+    return `<section class="ar-author-card glass" aria-label="${esc(t("nav.profile"))}">
+      ${open}${articleAvatar(profile)}<span class="ar-author-copy">
+        <strong class="ar-author-name">${esc(profile.display_name || profile.username || "CineAura member")}</strong>
+        ${profile.username ? `<span class="ar-author-handle">@${esc(profile.username)}</span>` : ""}
+      </span>${close}
+      <div class="ar-author-details">
+        ${membership ? `<span class="ar-author-badge">${esc(membership)}</span>` : ""}
+        ${languageName ? `<span class="ar-author-badge">${esc(languageName)}</span>` : ""}
+        ${profile.bio ? `<p class="ar-author-bio">${esc(profile.bio)}</p>` : ""}
+        ${stats.length ? `<div class="ar-author-stats">${stats.join("")}</div>` : ""}
+        ${href ? `<a class="btn btn-sm btn-ghost ar-author-open" href="${esc(href)}">${esc(t("nav.profile"))}</a>` : ""}
+      </div>
+    </section>`;
+  }
+
+  function articleExcerpt(row) {
+    const summary = String(row?.description || "").trim() || articlePlainText(row);
+    return summary.length > 190 ? `${summary.slice(0, 187).trimEnd()}…` : summary;
+  }
+
+  function articleListCard(row, authors) {
+    const author = authors.get(String(row.member_id)) || { member_id: row.member_id, display_name: "CineAura member" };
+    const profileHref = articleProfileHref(author);
+    const authorTag = profileHref
+      ? `<a class="ar-list-author" href="${esc(profileHref)}">${articleAvatar(author, "ar-list-avatar")}<span>${esc(author.display_name)}</span></a>`
+      : `<span class="ar-list-author">${articleAvatar(author, "ar-list-avatar")}<span>${esc(author.display_name)}</span></span>`;
+    const categories = articleCategories(row).slice(0, 3);
+    const url = dLink("article", row.id);
+    return `<article class="ar-list-card glass">
+      <a class="ar-list-cover" href="${url}" aria-label="${esc(row.title || "")}">${articleCoverMarkup(row, "ar-list-cover-image", row.title || "")}</a>
+      <div class="ar-list-copy">
+        ${categories.length ? `<div class="ar-list-cats">${categories.map((category) => `<span class="ar-chip">${esc(category)}</span>`).join("")}</div>` : ""}
+        <h2><a href="${url}">${esc(row.title || "")}</a></h2>
+        <p class="ar-list-description">${esc(articleExcerpt(row))}</p>
+        <div class="ar-list-meta">${authorTag}<span>${esc(articleDate(row.publish_at || row.created_at))}</span>
+          <span>◷ ${esc(articleReadTimeLabel(articleReadMinutes(row)))}</span><span>👁 ${esc(articleNumber(row.views))}</span></div>
+      </div>
+    </article>`;
   }
 
   async function listArticles(box) {
-    const res = await req("/rest/v1/community_articles?select=*&order=created_at.desc&limit=80");
-    const rows = res.ok && Array.isArray(res.data) ? res.data.filter(articleIsPublicNow) : [];
+    const res = await req(`/rest/v1/community_articles?select=${ARTICLE_SUMMARY_FIELDS}&status=eq.published&visibility=eq.public&order=created_at.desc&limit=80`);
     if (!res.ok) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))}</p>`);
+    const rows = Array.isArray(res.data) ? res.data.filter(articleIsPublicNow) : [];
     if (!rows.length)
-      return (box.innerHTML = `<p class="com-empty muted">${esc(t("com.emptyA"))} <a class="btn btn-sm btn-primary" href="#new-article">${esc(t("com.newArticle"))}</a></p>`);
-    const names = await nameMap(rows.map((r) => r.member_id));
-    box.innerHTML = rows
-      .map(
-        (a) => `<a class="com-row glass" href="${dLink("article", a.id)}">
-          <span class="com-row-main"><strong>${esc(a.title)}</strong>
-          <span class="muted">${esc(who(names, a.member_id))} · ${esc(when(a.created_at))}${a.tags ? ` · ${esc(a.tags)}` : ""}</span></span>
-          <span class="com-chip">👁 ${a.views || 0}</span>
-        </a>`
-      )
-      .join("");
+      return (box.innerHTML = `<p class="com-empty muted">${esc(t("com.emptyA"))} <a class="btn btn-sm btn-primary" href="./article-Editor.html">${esc(t("com.newArticle"))}</a></p>`);
+    const authors = await articleAuthorsByIds(rows.map((row) => row.member_id));
+    box.innerHTML = `<div class="ar-list-grid">${rows.map((row) => articleListCard(row, authors)).join("")}</div>`;
+    C()?.hydrateAvatars?.(box);
   }
 
   function articleForm(box) {
@@ -528,74 +721,192 @@
     };
   }
 
-  // Article page: the rich body from article-Editor.html, plus the same privacy gate the
-  // editor promises (private = listed people, exclusive = every criterion).
+  async function articleViewer(row) {
+    const session = C()?.getSession?.();
+    if (!session?.member_id) return null;
+    const id = String(session.member_id);
+    const [memberResult, profiles] = await Promise.all([
+      req(`/rest/v1/members?member_id=eq.${encodeURIComponent(id)}&select=member_id,username,country`).catch(() => ({ ok: false, data: [] })),
+      C()?.profilesByIds
+        ? C().profilesByIds([id], ARTICLE_VIEWER_PROFILE_FIELDS).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    const member = memberResult.ok && Array.isArray(memberResult.data) ? memberResult.data[0] || {} : {};
+    const profile = Array.isArray(profiles) ? profiles[0] || {} : {};
+    const viewer = {
+      member_id: id,
+      username: member.username || session.username || "",
+      profile: {
+        country: profile.country || member.country || "",
+        language: profile.language || "",
+        level: Number(profile.level || 0),
+        tier: String(profile.tier || ""),
+      },
+    };
+    const A = window.CineAuraArticles;
+    const requiresFollow = A?.critOf?.(row)?.followers;
+    if (requiresFollow && id !== String(row.member_id || "")) {
+      const follow = await req(`/rest/v1/follows?follower_id=eq.${encodeURIComponent(id)}&following_id=eq.${encodeURIComponent(row.member_id)}&status=eq.accepted&select=id&limit=1`).catch(() => ({ ok: false, data: [] }));
+      viewer.follows = Boolean(follow.ok && Array.isArray(follow.data) && follow.data.length);
+    }
+    return viewer;
+  }
+
+  function articleUnavailable(box, back, row, mine) {
+    const released = articleIsContentPublished(row);
+    const visibility = String(row?.visibility || "public").toLowerCase();
+    const message = !mine && !released
+      ? t("ae.notPublished")
+      : visibility === "private" ? t("ae.privateGate") : t("ae.exclusiveGate");
+    box.innerHTML = `<div class="ar-reader-grid ar-reader-grid--single">
+      <section class="ar-reader-message glass"><a class="com-back" href="${esc(back)}">← ${esc(t("com.backList"))}</a>
+        <div class="ar-reader-lock" aria-hidden="true">🔒</div><h2>${esc(message)}</h2>
+      </section></div>`;
+  }
+
+  let articleProgressHandler = null;
+  function bindArticleProgress(root) {
+    if (articleProgressHandler) window.removeEventListener("scroll", articleProgressHandler);
+    const fill = root.querySelector(".ar-read-progress > span");
+    const body = root.querySelector("#ar-reader-body");
+    if (!fill || !body) return;
+    articleProgressHandler = () => {
+      const rect = body.getBoundingClientRect();
+      const total = Math.max(1, rect.height - window.innerHeight + 180);
+      const progress = Math.max(0, Math.min(1, (150 - rect.top) / total));
+      fill.style.transform = `scaleX(${progress})`;
+    };
+    window.addEventListener("scroll", articleProgressHandler, { passive: true });
+    articleProgressHandler();
+  }
+
+  async function renderRelatedArticles(box, current) {
+    if (!box) return;
+    const res = await req(`/rest/v1/community_articles?select=${ARTICLE_SUMMARY_FIELDS}&status=eq.published&visibility=eq.public&order=created_at.desc&limit=80`);
+    if (!res.ok) return (box.innerHTML = `<p class="muted">${esc(t("com.loadFail"))}</p>`);
+    const currentId = String(current.id);
+    const currentCats = new Set(articleCategories(current).map((value) => value.toLocaleLowerCase()));
+    const rows = (Array.isArray(res.data) ? res.data : [])
+      .filter((row) => String(row.id) !== currentId && articleIsPublicNow(row))
+      .sort((a, b) => {
+        const score = (row) => articleCategories(row).reduce((sum, value) => sum + Number(currentCats.has(value.toLocaleLowerCase())), 0);
+        return score(b) - score(a) || Date.parse(b.publish_at || b.created_at || 0) - Date.parse(a.publish_at || a.created_at || 0);
+      })
+      .slice(0, 4);
+    if (!rows.length) return (box.innerHTML = `<p class="muted">${esc(t("com.emptyA"))}</p>`);
+    const authors = await articleAuthorsByIds(rows.map((row) => row.member_id));
+    box.innerHTML = rows.map((row) => {
+      const author = authors.get(String(row.member_id));
+      const href = dLink("article", row.id);
+      return `<a class="ar-suggested" href="${href}">
+        ${articleCoverMarkup(row, "ar-suggested-image", row.title || "")}
+        <span class="ar-suggested-copy"><strong>${esc(row.title || "")}</strong>
+          <small>${esc(author?.display_name || author?.username || "CineAura member")} · ${esc(articleDate(row.publish_at || row.created_at))}</small>
+        </span></a>`;
+    }).join("");
+    C()?.hydrateAvatars?.(box);
+  }
+
+  // The reader always loads the editor's real community_articles row. The body
+  // is sanitised again, while release time, content placement and visibility are
+  // checked before any private title, author or metadata is painted.
   async function articleView(box, id) {
     const A = window.CineAuraArticles;
-    const res = await req(`/rest/v1/community_articles?id=eq.${id}&select=*`);
-    const a = res.ok && Array.isArray(res.data) ? res.data[0] : null;
     const back = listHref("article");
-    if (!a) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))} <a href="${back}">${esc(t("com.backList"))}</a></p>`);
+    // First read only the fields required to decide access; do not fetch article text or title yet.
+    const gateRes = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(id)}&select=${ARTICLE_ACCESS_FIELDS}&limit=1`);
+    const gateRow = gateRes.ok && Array.isArray(gateRes.data) ? gateRes.data[0] : null;
+    if (!gateRow) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))} <a href="${esc(back)}">${esc(t("com.backList"))}</a></p>`);
 
-    const names = await nameMap([a.member_id]);
-    const mine = meId() && meId() === a.member_id;
-    if (!mine)
-      req(`/rest/v1/community_articles?id=eq.${id}`, {
+    const session = C()?.getSession?.();
+    const mine = Boolean(session?.member_id && String(session.member_id) === String(gateRow.member_id));
+    const visibility = String(gateRow.visibility || "public").trim().toLowerCase();
+    let allowed = mine;
+    if (!mine && articleIsContentPublished(gateRow)) {
+      if (visibility === "public") allowed = true;
+      else if (["private", "exclusive"].includes(visibility) && A?.canRead && session?.member_id) {
+        try {
+          // Do not fetch the article's private audience list for guests or public articles.
+          const aclRes = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(id)}&select=excl,private_users&limit=1`).catch(() => ({ ok: false, data: [] }));
+          const acl = aclRes.ok && Array.isArray(aclRes.data) ? aclRes.data[0] : null;
+          if (acl) {
+            const accessRow = { ...gateRow, ...acl, visibility };
+            const viewer = await articleViewer(accessRow);
+            allowed = Boolean(A.canRead(accessRow, viewer, false));
+          }
+        } catch {
+          allowed = false;
+        }
+      }
+    }
+    if (!allowed) return articleUnavailable(box, back, gateRow, mine);
+
+    // Once permitted, load the author-facing fields and sanitized rich body.
+    const detailRes = await req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(id)}&select=${ARTICLE_DETAIL_FIELDS}&limit=1`);
+    const detailRow = detailRes.ok && Array.isArray(detailRes.data) ? detailRes.data[0] : null;
+    if (!detailRow) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))} <a href="${esc(back)}">${esc(t("com.backList"))}</a></p>`);
+    const a = { ...gateRow, ...detailRow };
+    if (!mine && !articleIsContentPublished(a)) return articleUnavailable(box, back, a, mine);
+
+    const authors = await articleAuthorsByIds([a.member_id]);
+    const author = authors.get(String(a.member_id)) || {
+      member_id: a.member_id,
+      username: "",
+      display_name: "CineAura member",
+    };
+    const categories = articleCategories(a);
+    const date = articleDate(a.publish_at || a.created_at);
+    const readMinutes = articleReadMinutes(a);
+    const viewCount = Number(a.views || 0) + (mine || !articleIsReleased(a) ? 0 : 1);
+    const body = A?.bodyHtml ? A.bodyHtml(a) : `<p>${esc(a.body || "")}</p>`;
+    const title = String(a.title || "");
+    const share = C()?.shareRowHtml
+      ? C().shareRowHtml(dLink("article", a.id), title, { compact: true, label: t("share.title") })
+      : "";
+    const edit = mine ? `<a class="btn btn-sm btn-ghost" href="./article-Editor.html?edit=${encodeURIComponent(a.id)}">${esc(t("ae.edit"))}</a>` : "";
+
+    if (!mine && articleIsReleased(a)) {
+      req(`/rest/v1/community_articles?id=eq.${encodeURIComponent(id)}`, {
         method: "PATCH",
         body: JSON.stringify({ views: Number(a.views || 0) + 1 }),
       }).catch(() => {});
-
-    // Drafts, Help submissions awaiting review, and scheduled articles stay private until released.
-    if (a.status === "draft" && !mine)
-      return (box.innerHTML = `<a class="com-back" href="${back}">← ${esc(t("com.backList"))}</a>
-        <p class="com-note">🔒 ${esc(t("ae.notPublished"))}</p>`);
-    if (!articleIsPublicNow(a) && !mine)
-      return (box.innerHTML = `<a class="com-back" href="${back}">← ${esc(t("com.backList"))}</a>
-        <p class="com-note">🔒 ${esc(t("ae.notPublished"))}</p>`);
-
-    // Who is looking: the member row carries the level / country used by exclusive.
-    let viewer = meId() ? { member_id: meId(), username: (C()?.getSession?.()?.username || ""), profile: {} } : null;
-    if (viewer) {
-      const pr = await req(`/rest/v1/members?member_id=eq.${encodeURIComponent(meId())}&select=username,country,language,level,tier`);
-      const p = pr.ok && Array.isArray(pr.data) ? pr.data[0] : null;
-      if (p) viewer = { ...viewer, username: p.username || viewer.username, profile: p };
-    }
-    const staff = false;
-    const allowed = A ? A.canRead(a, viewer, staff) : true;
-
-    const cover = a.thumb ? `<img class="ar-cover" src="${esc(a.thumb)}" alt="" loading="lazy" />` : "";
-    const cats = String(a.categories || a.tags || "").split(",").map((x) => x.trim()).filter(Boolean);
-    const head = `<a class="com-back" href="${back}">← ${esc(t("com.backList"))}</a>
-      <article class="com-article glass">
-        ${cover}
-        <h2>${esc(a.title)}</h2>
-        <p class="muted">${esc(who(names, a.member_id))} · ${esc(when(a.publish_at || a.created_at))}${a.language ? ` · ${esc(a.language)}` : ""} · 👁 ${(a.views || 0) + 1}${mine ? ` · <a href="./article-Editor.html?edit=${encodeURIComponent(a.id)}">${esc(t("ae.edit"))}</a>` : ""}</p>
-        ${cats.length ? `<p>${cats.map((c) => `<span class="ar-chip">${esc(c)}</span>`).join("")}</p>` : ""}
-      </article>`;
-
-    if (!allowed) {
-      const c = A ? A.critOf(a) : {};
-      const list = [
-        c.followers ? t("ae.followersOnly") : "",
-        c.countries?.length ? `${t("ae.country")}: ${c.countries.join(", ")}` : "",
-        c.languages?.length ? `${t("ae.language")}: ${c.languages.join(", ")}` : "",
-        `${t("ae.level")}: ${c.lvMin ?? 0} – ${c.lvMax ?? 10}`,
-        c.tier ? `${t("ae.tier")}: ${c.tier}` : "",
-      ].filter(Boolean);
-      return (box.innerHTML = `${head}
-        <div class="glass" style="padding:22px;text-align:center">
-          <p style="font-size:26px">🔒</p>
-          <h3>${esc(a.visibility === "private" ? t("ae.privateGate") : t("ae.exclusiveGate"))}</h3>
-          ${a.visibility === "private" ? `<p class="muted">${esc(t("ae.privateGateText"))}</p>` : `<ul class="muted" style="list-style:none;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding:0">${list.map((x) => `<li class="ar-chip">${esc(x)}</li>`).join("")}</ul>`}
-        </div>`);
     }
 
-    const body = A ? A.bodyHtml(a) : `<p class="com-body">${esc(a.body || "")}</p>`;
-    box.innerHTML = `${head}
-      <article class="com-article glass">
-        ${a.description ? `<p class="lead" style="color:var(--muted,#9bb0c2);font-size:16px">${esc(a.description)}</p>` : ""}
-        <div class="ar-body">${body}</div>
-      </article>`;
+    document.title = `${title} — CineAura`;
+    box.innerHTML = `<div class="ar-read-progress" aria-hidden="true"><span></span></div>
+      <div class="ar-reader-grid">
+        <article class="ar-reader-article glass">
+          ${articleCoverMarkup(a, "ar-reader-cover", title)}
+          <div class="ar-reader-content">
+            <a class="com-back" href="${esc(back)}">← ${esc(t("com.backList"))}</a>
+            <h1 class="ar-reader-title">${esc(title)}</h1>
+            <div class="ar-reader-meta">
+              <span>◷ ${esc(articleReadTimeLabel(readMinutes))}</span>
+              <span>👁 ${esc(articleNumber(viewCount))}</span>
+              <span>${esc(date)}</span>
+              ${a.language ? `<span>${esc(C()?.LANG_NAMES?.[a.language] || a.language)}</span>` : ""}
+            </div>
+            ${categories.length ? `<div class="ar-reader-cats">${categories.map((category) => `<span class="ar-chip">${esc(category)}</span>`).join("")}</div>` : ""}
+            ${a.description ? `<p class="ar-reader-lead">${esc(a.description)}</p>` : ""}
+            <div class="ar-reader-body" id="ar-reader-body">${body}</div>
+            <div class="ar-reader-actions">${share}${edit}</div>
+            ${articleAuthorCard(author)}
+          </div>
+        </article>
+        <aside class="ar-reader-sidebar">
+          <section class="ar-sidebar-panel glass">
+            <h2>${esc(t("help.related"))}</h2>
+            <div id="ar-related"><p class="muted">${esc(t("common.loading"))}</p></div>
+          </section>
+          <section class="ar-sidebar-cta glass">
+            <h2>${esc(t("ct.leadArticles"))}</h2>
+            <a class="btn btn-sm btn-primary" href="./article-Editor.html">✍ ${esc(t("com.newArticle"))}</a>
+          </section>
+        </aside>
+      </div>`;
+    bindArticleProgress(box);
+    C()?.hydrateAvatars?.(box);
+    renderRelatedArticles(box.querySelector("#ar-related"), a);
   }
 
   // ─────────────────────────── groups ───────────────────────────
@@ -896,11 +1207,11 @@
     const [q, a, arts] = await Promise.all([
       req(`/rest/v1/community_questions?member_id=eq.${encodeURIComponent(memberId)}&select=*&order=created_at.desc&limit=100`),
       req(`/rest/v1/community_answers?member_id=eq.${encodeURIComponent(memberId)}&select=*&order=created_at.desc&limit=100`),
-      req(`/rest/v1/community_articles?member_id=eq.${encodeURIComponent(memberId)}&select=*&order=created_at.desc&limit=100`),
+      req(`/rest/v1/community_articles?member_id=eq.${encodeURIComponent(memberId)}&status=eq.published&visibility=eq.public&select=id,member_id,title,created_at,views,publish_at,status,visibility,places&order=created_at.desc&limit=100`),
     ]);
     const qs = q.ok && Array.isArray(q.data) ? q.data : [];
     const ans = a.ok && Array.isArray(a.data) ? a.data : [];
-    const ats = arts.ok && Array.isArray(arts.data) ? arts.data : [];
+    const ats = arts.ok && Array.isArray(arts.data) ? arts.data.filter(articleIsPublicNow) : [];
     const failed = !q.ok || !a.ok || !arts.ok;
     const qTitles = new Map();
     if (ans.length) {
@@ -1001,12 +1312,16 @@
     const table = kind === "questions" ? "community_questions" : "community_articles";
     const take = Math.max(1, Number(limit) || 4);
     const fetchLimit = kind === "questions" ? take : Math.max(80, take);
-    const res = await req(`/rest/v1/${table}?select=*&order=created_at.desc&limit=${fetchLimit}`);
+    const query = kind === "questions"
+      ? `/rest/v1/${table}?select=*&order=created_at.desc&limit=${fetchLimit}`
+      : `/rest/v1/community_articles?select=${ARTICLE_SUMMARY_FIELDS}&status=eq.published&visibility=eq.public&order=created_at.desc&limit=${fetchLimit}`;
+    const res = await req(query);
     const fetched = res.ok && Array.isArray(res.data) ? res.data : [];
     const rows = (kind === "questions" ? fetched : fetched.filter(articleIsPublicNow)).slice(0, take);
     if (!res.ok) return (box.innerHTML = `<p class="com-note">⚠ ${esc(t("com.loadFail"))}</p>`);
     if (!rows.length) return (box.innerHTML = `<p class="com-empty muted">${esc(t(kind === "questions" ? "com.emptyQ" : "com.emptyA"))}</p>`);
-    const names = await nameMap(rows.map((r) => r.member_id));
+    const names = kind === "questions" ? await nameMap(rows.map((r) => r.member_id)) : null;
+    const authors = kind === "questions" ? null : await articleAuthorsByIds(rows.map((r) => r.member_id));
     box.innerHTML = rows
       .map((r) =>
         kind === "questions"
@@ -1017,11 +1332,12 @@
         </a>`
           : `<a class="com-row glass" href="${dLink("article", r.id)}">
           <span class="com-row-main"><strong>${esc(r.title)}</strong>
-          <span class="muted">${esc(who(names, r.member_id))} · ${esc(when(r.created_at))}${r.tags ? ` · ${esc(r.tags)}` : ""}</span></span>
-          <span class="com-chip">👁 ${r.views || 0}</span>
+          <span class="muted">${esc(authors.get(String(r.member_id))?.display_name || "CineAura member")} · ${esc(articleDate(r.publish_at || r.created_at))}${articleCategories(r).length ? ` · ${esc(articleCategories(r).join(", "))}` : ""}</span></span>
+          <span class="com-chip">👁 ${esc(articleNumber(r.views))}</span>
         </a>`
       )
       .join("");
+    if (kind !== "questions") C()?.hydrateAvatars?.(box);
   }
 
   // The head of one type page: its name, what it holds, and the one action that
